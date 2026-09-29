@@ -11,7 +11,7 @@ import {
 } from './timer.js';
 import { renderCharts } from './charts.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const $ = (id) => document.getElementById(id);
 const view = $('view');
 const DAYS = ['A', 'B', 'C'];
@@ -70,14 +70,44 @@ function toast(msg, ms = 2400) {
 function autosize(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px'; }
 
 // ---------- sheet ----------
-function openSheet(html, ctx = {}) {
+function openSheet(html, ctx = {}, keepScroll = false) {
+  const sheet = $('sheet');
+  const top = keepScroll && !$('sheetWrap').hidden ? sheet.scrollTop : 0;
   ui.sheet = ctx;
-  $('sheet').innerHTML = html;
+  sheet.innerHTML = `<button class="sheet-x" data-close aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>${html}`;
+  sheet.style.transform = '';
   $('sheetWrap').hidden = false;
-  $('sheet').querySelectorAll('textarea').forEach(autosize);
+  sheet.scrollTop = top;
+  sheet.querySelectorAll('textarea').forEach(autosize);
 }
-function closeSheet() { $('sheetWrap').hidden = true; $('sheet').innerHTML = ''; ui.sheet = null; }
-$('sheetWrap').addEventListener('click', (e) => { if (e.target.hasAttribute('data-close')) closeSheet(); });
+function closeSheet() {
+  const r = ui.sheet?.resolve;
+  $('sheetWrap').hidden = true; $('sheet').innerHTML = ''; ui.sheet = null;
+  r?.(false);
+}
+$('sheetWrap').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeSheet(); });
+
+// Swipe the sheet down to dismiss it (only when it is scrolled to the top).
+(() => {
+  const sheet = $('sheet');
+  let y0 = null, dy = 0;
+  sheet.addEventListener('touchstart', (e) => {
+    if (sheet.scrollTop > 0 || e.target.closest('input, textarea, select')) { y0 = null; return; }
+    y0 = e.touches[0].clientY; dy = 0;
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy > 0 && sheet.scrollTop <= 0) { e.preventDefault(); sheet.classList.remove('snap'); sheet.style.transform = `translateY(${dy}px)`; }
+    else if (dy < 0) { y0 = null; sheet.style.transform = ''; }
+  }, { passive: false });
+  sheet.addEventListener('touchend', () => {
+    if (y0 == null) return;
+    y0 = null;
+    if (dy > 110) closeSheet();
+    else { sheet.classList.add('snap'); sheet.style.transform = ''; }
+  });
+})();
 
 function confirmSheet(title, body, okLabel = 'Confirm', danger = false) {
   return new Promise((resolve) => {
@@ -469,14 +499,14 @@ function readForm(root) {
 }
 
 // ---------- settings ----------
-function openSettings() {
+function openSettings(keepScroll = false) {
   const signed = signedIn();
   const push = state.prefs.push;
   const acct = !syncStatus.enabled
     ? '<p class="small muted">Cloud sync is not configured in <code>config.js</code>. Data is stored on this phone only.</p>'
     : signed
-      ? `<div class="toggle"><div class="grow"><b>${esc(state.sync.userEmail || 'Signed in')}</b><div class="small muted">${syncStatus.error ? esc(syncStatus.error) : state.sync.lastSync ? 'Synced ' + new Date(state.sync.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not synced yet'}</div></div>
-          <button class="btn sm" data-act="sync-now">Sync now</button></div>
+      ? `<div class="toggle"><div class="grow"><b>${esc(state.sync.userEmail || 'Signed in')}</b><div class="small muted" id="syncLine">${syncStatus.error ? esc(syncStatus.error) : state.sync.lastSync ? 'Synced ' + new Date(state.sync.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not synced yet'}</div></div>
+          <button class="btn sm" data-act="sync-now" id="syncNowBtn">Sync now</button></div>
          <button class="menu-item danger" data-act="sign-out">Sign out</button>`
       : `<p class="small muted">Sign in to back up and sync your workouts. Everything you logged offline will be uploaded.</p>
          <button class="btn primary block" data-act="sign-in">Sign in with Google</button>`;
@@ -498,7 +528,7 @@ function openSettings() {
       <button class="menu-item" data-act="export">Export backup (JSON)</button>
       <label class="menu-item" style="cursor:pointer">Import backup<input type="file" accept="application/json,.json" data-act-change="import" hidden></label>
       <button class="menu-item danger" data-act="reset-program">Reset program to the original sheet</button></div>
-    <p class="small faint" style="text-align:center;margin-top:18px">Lift Log ${VERSION}</p>`);
+    <p class="small faint" style="text-align:center;margin-top:18px">Lift Log ${VERSION}</p>`, {}, keepScroll);
 }
 
 // ---------- actions ----------
@@ -525,7 +555,7 @@ async function startDay(day, date) {
   scheduleSync();
   ui.tab = 'train';
   render();
-  scrollTo(0, 0);
+  view.scrollTo(0, 0);
 }
 
 const actions = {
@@ -642,7 +672,7 @@ const actions = {
     touchSession(s); closeSheet(); render();
   },
   'remove-ex'(el) { const s = cur(); s.exercises.splice(+el.dataset.i, 1); touchSession(s); closeSheet(); render(); },
-  'ex-progress'(el) { ui.progressEx = el.dataset.id; ui.tab = 'progress'; closeSheet(); render(); scrollTo(0, 0); },
+  'ex-progress'(el) { ui.progressEx = el.dataset.id; ui.tab = 'progress'; closeSheet(); render(); view.scrollTo(0, 0); },
   async finish() {
     const s = activeSession();
     const left = s.exercises.reduce((a, e) => a + (e.skipped ? 0 : e.sets.filter((x) => !x.done).length), 0);
@@ -654,7 +684,7 @@ const actions = {
     const st = sessionStats(s);
     const key = s.date + s.startedAt;
     const prs = s.exercises.filter((e) => { const b = bestBefore(e.id, key); return b > 0 && doneSets(e).some((x) => e1rm(num(x.w), num(x.r)) > b); });
-    ui.tab = 'history'; ui.historyId = s.id; render(); scrollTo(0, 0);
+    ui.tab = 'history'; ui.historyId = s.id; render(); view.scrollTo(0, 0);
     openSheet(`<h2>Workout saved 💪</h2>
       <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
         <div class="card tile"><div class="v" style="font-size:22px">${fmtDur(st.dur)}</div><div class="k">Duration</div></div>
@@ -669,8 +699,8 @@ const actions = {
     s.deleted = true; state.activeId = null; stopRest();
     touchSession(s); scheduleSync(); render();
   },
-  'edit-done'() { const id = ui.editingId; ui.editingId = null; const s = state.sessions[id]; if (!s.finishedAt) { s.finishedAt = s.startedAt; touchSession(s); } scheduleSync(); ui.tab = 'history'; ui.historyId = id; render(); scrollTo(0, 0); },
-  'edit-session'(el) { if (activeSession()) return toast('Finish the current workout first'); ui.editingId = el.dataset.id; ui.tab = 'train'; render(); scrollTo(0, 0); },
+  'edit-done'() { const id = ui.editingId; ui.editingId = null; const s = state.sessions[id]; if (!s.finishedAt) { s.finishedAt = s.startedAt; touchSession(s); } scheduleSync(); ui.tab = 'history'; ui.historyId = id; render(); view.scrollTo(0, 0); },
+  'edit-session'(el) { if (activeSession()) return toast('Finish the current workout first'); ui.editingId = el.dataset.id; ui.tab = 'train'; render(); view.scrollTo(0, 0); },
   async 'delete-session'(el) {
     if (!(await confirmSheet('Delete this workout?', 'It will be removed from history and charts on all devices.', 'Delete', true))) return;
     const s = state.sessions[el.dataset.id];
@@ -678,7 +708,7 @@ const actions = {
     if (ui.editingId === s.id) ui.editingId = null;
     touchSession(s); scheduleSync(); ui.historyId = null; ui.tab = 'history'; render();
   },
-  'open-hist'(el) { ui.historyId = el.dataset.id; render(); scrollTo(0, 0); },
+  'open-hist'(el) { ui.historyId = el.dataset.id; render(); view.scrollTo(0, 0); },
   'hist-back'() { ui.historyId = null; render(); },
   'hist-mode'(el) { ui.histMode = el.dataset.m; render(); },
   'grid-day'(el) { ui.gridDay = el.dataset.d; render(); },
@@ -754,19 +784,26 @@ const actions = {
     touchProfile(); scheduleSync(); closeSheet(); render();
   },
   'wu-del'(el) { state.program[ui.programDay].warmups.splice(+el.dataset.k, 1); touchProfile(); scheduleSync(); closeSheet(); render(); },
-  'sheet-ok'() { const r = ui.sheet?.resolve; closeSheet(); r?.(true); },
-  'sheet-cancel'() { const r = ui.sheet?.resolve; closeSheet(); r?.(false); },
+  'sheet-ok'() { const r = ui.sheet?.resolve; if (ui.sheet) ui.sheet.resolve = null; closeSheet(); r?.(true); },
+  'sheet-cancel'() { closeSheet(); },
   async 'sign-in'() { try { await signIn(); } catch (e) { toast(e.message); } },
   async 'sign-out'() {
     if (!(await confirmSheet('Sign out?', 'Your data stays on this phone. Unsynced changes upload the next time you sign in.', 'Sign out'))) return;
     await signOut(); render();
   },
-  async 'sync-now'() { await syncNow(); openSettings(); toast(syncStatus.error ? 'Sync failed: ' + syncStatus.error : 'Synced'); },
+  async 'sync-now'(el) {
+    el.disabled = true; el.textContent = 'Syncing…';
+    await syncNow();
+    el.disabled = false; el.textContent = 'Sync now';
+    const line = $('syncLine');
+    if (line) line.textContent = syncStatus.error || `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    toast(syncStatus.error ? 'Sync failed: ' + syncStatus.error : 'Synced');
+  },
   async 'push-on'() {
     try { await enablePush(); toast('Lock-screen alerts on'); } catch (e) { toast(e.message, 5000); }
-    openSettings();
+    openSettings(true);
   },
-  async 'push-off'() { await disablePush(); openSettings(); },
+  async 'push-off'() { await disablePush(); openSettings(true); },
   async 'push-test'() { await sendTestPush(); toast('Lock your phone: an alert arrives in ~5 s'); },
   async export() {
     const blob = new Blob([JSON.stringify({ ...state, timer: null }, null, 1)], { type: 'application/json' });
@@ -807,7 +844,7 @@ async function importBackup(file) {
 document.addEventListener('click', async (e) => {
   const tab = e.target.closest('#tabs [data-tab]');
   if (tab) {
-    if (ui.tab === tab.dataset.tab) { ui.historyId = null; scrollTo({ top: 0, behavior: 'smooth' }); }
+    if (ui.tab === tab.dataset.tab) { ui.historyId = null; view.scrollTo({ top: 0, behavior: 'smooth' }); }
     ui.tab = tab.dataset.tab; render(); return;
   }
   const el = e.target.closest('[data-act]');
@@ -855,7 +892,7 @@ document.addEventListener('change', (e) => {
   } else if (el.dataset.set === 'startDate') {
     state.settings.startDate = el.value || null;
     for (const s of liveSessions()) { const w = weekFor(s.date); if (s.week !== w) { s.week = w; touchSession(s); } }
-    touchProfile(); scheduleSync(); openSettings(); render();
+    touchProfile(); scheduleSync(); openSettings(true); render();
   } else if (el.dataset.pref) {
     state.prefs[el.dataset.pref] = el.checked; save(); manageWakeLock();
   } else if (el.dataset.actChange === 'import' && el.files[0]) {
