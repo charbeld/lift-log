@@ -1,4 +1,4 @@
-// Local-first state: everything lives in localStorage and is synced to Supabase by sync.js.
+// Local-first state: everything lives in localStorage and is synced to the Worker (Cloudflare D1) by sync.js.
 import { freshProgram } from './program.js';
 
 const KEY = 'liftlog:v1';

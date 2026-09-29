@@ -9,7 +9,7 @@ let tick = null;
 let audio = null;
 let alerted = false;
 
-export const pushConfigured = () => !!(CONFIG.pushUrl && CONFIG.vapidPublicKey);
+export const pushConfigured = () => !!(CONFIG.apiUrl && CONFIG.vapidPublicKey);
 export const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 // iOS only lets audio start inside a user gesture, so warm it up on the first tap.
@@ -140,7 +140,7 @@ async function call(path, body) {
   try {
     const token = await accessToken();
     if (!token) return;
-    await fetch(CONFIG.pushUrl.replace(/\/$/, '') + path, {
+    await fetch(CONFIG.apiUrl.replace(/\/$/, '') + path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify(body),

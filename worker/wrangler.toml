@@ -1,6 +1,11 @@
-name = "liftlog-push"
+name = "liftlog"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "liftlog"
+database_id = "local-dev"
 
 [[durable_objects.bindings]]
 name = "TIMERS"
@@ -12,10 +17,9 @@ tag = "v1"
 new_sqlite_classes = ["RestTimer"]
 
 [vars]
-SUPABASE_URL = ""
-SUPABASE_ANON_KEY = ""
+GOOGLE_CLIENT_ID = ""
 VAPID_PUBLIC_KEY = "BC6YxRoXiYWB5UYDgkP4KwyZBHCzayJqj_IoZYn7hOh6m5qjWQOhZcIzglCt2MAF5EmOMsvAdf3RYGpiQtOHBL4"
 VAPID_SUBJECT = "https://charbeld.github.io/lift-log/"
 ALLOWED_ORIGIN = "*"
 ALLOWED_EMAILS = ""
-# Secret (set with `wrangler secret put VAPID_PRIVATE_JWK`): VAPID_PRIVATE_JWK
+# Secret (wrangler secret put VAPID_PRIVATE_JWK < .vapid-private.json): VAPID_PRIVATE_JWK

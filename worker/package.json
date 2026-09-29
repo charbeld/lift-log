@@ -1,1 +1,1 @@
-{"name":"liftlog-push","private":true,"type":"module"}
+{"name":"liftlog-push","private":true,"type":"module","devDependencies":{"wrangler":"^4.143.1"}}

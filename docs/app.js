@@ -256,7 +256,7 @@ function renderHistory() {
       return `<button class="card h-item" data-act="open-hist" data-id="${s.id}">
         <div class="h-badge ${s.day}">${s.day}</div>
         <div class="grow"><div style="font-weight:700">${esc(dayTitle(s.day))}</div>
-          <div class="h-stats"><span>${fmtDate(s.date)}</span><span>${st.sets} sets</span><span>${fmtVol(st.volume)}</span>${st.dur ? `<span>${fmtDur(st.dur)}</span>` : ''}</div></div>
+          <div class="h-stats"><span>${fmtDate(s.date)}</span><span>${st.sets} set${st.sets === 1 ? "" : "s"}</span><span>${fmtVol(st.volume)}</span>${st.dur ? `<span>${fmtDur(st.dur)}</span>` : ''}</div></div>
         ${icon('back').replace('class="i"', 'class="i" style="transform:rotate(180deg);color:var(--faint)"')}
       </button>`;
     }).join('');
