@@ -17,9 +17,9 @@
   --core: #62d6a3;
   --warm: #ffb547;
   --radius: 16px;
-  --tabs-h: 54px;
+  --tabs-h: 50px;
   /* Tab bar sits just above the home indicator, like native iOS tab bars. */
-  --tabs-pb: max(calc(env(safe-area-inset-bottom, 0px) - 18px), 6px);
+  --tabs-pb: max(calc(env(safe-area-inset-bottom, 0px) - 30px), 2px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
   color-scheme: dark;
