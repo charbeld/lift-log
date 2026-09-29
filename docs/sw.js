@@ -1,5 +1,5 @@
 // Offline shell + CDN cache + push notifications. Bump VERSION on every deploy.
-const VERSION = 'liftlog-v1';
+const VERSION = 'liftlog-v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'store.js', 'sync.js', 'timer.js', 'charts.js', 'program.js', 'config.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
