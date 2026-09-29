@@ -1,5 +1,5 @@
 // Offline shell + CDN cache + push notifications. Bump VERSION on every deploy.
-const VERSION = 'liftlog-v2';
+const VERSION = 'liftlog-v3';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'store.js', 'sync.js', 'timer.js', 'charts.js', 'program.js', 'config.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
@@ -23,7 +23,8 @@ self.addEventListener('fetch', (e) => {
   if (url.origin === location.origin) {
     // Network first for the app itself (fresh after deploys), cache when offline.
     e.respondWith(
-      fetch(req).then((res) => {
+      // no-cache: revalidate with GitHub Pages instead of trusting its 10-minute max-age.
+      fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
         return res;
       }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('index.html'))),
