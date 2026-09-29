@@ -1,0 +1,21 @@
+name = "liftlog-push"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[durable_objects.bindings]]
+name = "TIMERS"
+class_name = "RestTimer"
+
+# SQLite-backed Durable Objects are available on the Workers Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RestTimer"]
+
+[vars]
+SUPABASE_URL = ""
+SUPABASE_ANON_KEY = ""
+VAPID_PUBLIC_KEY = "BC6YxRoXiYWB5UYDgkP4KwyZBHCzayJqj_IoZYn7hOh6m5qjWQOhZcIzglCt2MAF5EmOMsvAdf3RYGpiQtOHBL4"
+VAPID_SUBJECT = "https://charbeld.github.io/lift-log/"
+ALLOWED_ORIGIN = "*"
+ALLOWED_EMAILS = ""
+# Secret (set with `wrangler secret put VAPID_PRIVATE_JWK`): VAPID_PRIVATE_JWK
