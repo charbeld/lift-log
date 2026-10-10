@@ -678,7 +678,7 @@ const actions = {
     el.disabled = true; el.textContent = 'Thinking…';
     try {
       const plan = await getCoachPlan();
-      state.recs = { at: Date.now(), summary: plan.summary, byKey: Object.fromEntries(plan.exercises.map((e) => [e.key, e])) };
+      state.recs = { at: Date.now(), summary: plan.summary, explained: plan.explained, byKey: Object.fromEntries(plan.exercises.map((e) => [e.key, e])) };
       save(); render(); actions['coach-show']();
     } catch (e) {
       toast('Coach: ' + e.message, 5000);
@@ -688,12 +688,13 @@ const actions = {
   'coach-show'() {
     const p = state.recs;
     if (!p) return;
-    openSheet(`<h2>Coach</h2><p class="small muted">${esc(p.summary)}</p>
+    openSheet(`<h2>Coach</h2><p class="small muted">${esc(p.summary)}${p.explained === false ? ' (Explanations unavailable right now; the plan is still computed from your logs.)' : ''}</p>
       ${DAYS.map((d) => `<h3>${esc(dayTitle(d))}</h3>${state.program[d].items.map((it) => {
         const r = p.byKey[it.id];
         if (!r) return '';
         return `<div class="card p-item"><div class="row"><div class="grow"><b>${esc(it.name)}</b></div><span class="chip">${esc(r.action)}</span></div>
           <div class="small" style="margin-top:6px"><b>${r.w != null ? fmtKg(r.w) + ' kg' : 'Choose a starting weight'}</b> · ${r.reps.join(' · ')} reps</div>
+          <div class="small faint" style="margin-top:4px">${esc(r.facts)}</div>
           <div class="cue" style="margin-top:4px">${esc(r.rationale)}</div>
           ${r.sources.length ? `<div class="small faint" style="margin-top:4px">${r.sources.map((s) => (s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}">${esc(s.id)}</a>` : `<span title="${esc(s.title)}">${esc(s.id)}</span>`)).join(' · ')}</div>` : ''}
         </div>`;
