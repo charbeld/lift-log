@@ -117,6 +117,12 @@ h3 { font-size: 13px; margin: 24px 0 10px; color: var(--muted); text-transform: 
 .day-card .tag { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
 .day-card p { margin: 4px 0 10px; color: var(--muted); font-size: 14px; }
 .day-card .meta { font-size: 13px; color: var(--faint); }
+.day-hit { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.plan-h { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.plan { list-style: none; margin: 6px 0 0; padding: 0; }
+.plan li { display: flex; gap: 10px; padding: 4px 0; font-size: 13px; color: var(--muted); }
+.plan .num { color: var(--text, inherit); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.plan .up { color: var(--accent); font-weight: 700; }
 .resume { margin-bottom: 16px; display: flex; align-items: center; gap: 12px; border-color: var(--accent); }
 
 /* Session */
