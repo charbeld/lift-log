@@ -1,5 +1,5 @@
 // Local-first state: everything lives in localStorage and is synced to the Worker (Cloudflare D1) by sync.js.
-import { freshProgram } from './program.js';
+import { freshProgram, exKey } from './program.js';
 
 const KEY = 'liftlog:v1';
 
@@ -12,6 +12,7 @@ function blank() {
     prefs: { sound: true, wake: true, push: false },
     pushSub: null,
     sessions: {},
+    recs: null, // last coach plan: { at, summary, byKey: { [programItemId]: { w, reps, action, rationale, sources } } }
     activeId: null,
     timer: null,
     sync: { cursor: null, dirty: [], dirtyProfile: false, lastSync: null, userEmail: null },
@@ -107,12 +108,12 @@ export function sessionStats(s) {
   return { volume, sets, dur };
 }
 
-// Most recent performance of an exercise before a given session.
+// Most recent performance of an exercise (any day's program) before a given session.
 export function lastPerformance(id, excludeId, beforeKey) {
   for (const s of liveSessions()) {
     if (s.id === excludeId) continue;
     if (beforeKey && (s.date + s.startedAt) >= beforeKey) continue;
-    const ex = s.exercises.find((e) => e.id === id && doneSets(e).length);
+    const ex = s.exercises.find((e) => exKey(e.id) === exKey(id) && doneSets(e).length);
     if (ex) return { session: s, ex };
   }
   return null;
@@ -151,9 +152,18 @@ export function newSession(day, date = todayStr()) {
   return s;
 }
 
+// The target for one program slot: a coach plan if it is newer than the last session, otherwise the double-progression rule.
+export function planFor(id, target, last) {
+  const rec = state.recs?.byKey?.[id];
+  if (rec && (!last || (state.recs.at || 0) > (last.session.updatedAt || 0))) {
+    return { w: rec.w, reps: rec.reps, up: rec.action === 'increase', text: `Coach: ${rec.action}${rec.w != null ? ' · ' + fmtKg(rec.w) + ' kg' : ''} · ${rec.reps.join(' · ')}` };
+  }
+  return suggestion(target, last);
+}
+
 export function buildExercise(item, beforeKey) {
   const last = lastPerformance(item.id, null, beforeKey);
-  const sug = suggestion(item, last);
+  const sug = planFor(item.id, item, last);
   return {
     id: item.id, name: item.name, cat: item.cat,
     target: { sets: item.sets, repMin: item.repMin, repMax: item.repMax, rest: item.rest },
@@ -162,8 +172,10 @@ export function buildExercise(item, beforeKey) {
   };
 }
 
+// The program item for an id: today's day first, then any other program day (exercises can be added from other days).
 export function findItem(day, id) {
-  return state.program[day]?.items.find((it) => it.id === id);
+  return state.program[day]?.items.find((it) => it.id === id)
+    ?? Object.values(state.program).flatMap((p) => p.items).find((it) => it.id === id);
 }
 
 // All-time best e1RM for an exercise before a session (for PR flags).
@@ -171,7 +183,7 @@ export function bestBefore(id, beforeKey) {
   let best = 0;
   for (const s of liveSessions()) {
     if ((s.date + s.startedAt) >= beforeKey) continue;
-    for (const ex of s.exercises) if (ex.id === id) for (const st of doneSets(ex)) best = Math.max(best, e1rm(num(st.w), num(st.r)));
+    for (const ex of s.exercises) if (exKey(ex.id) === exKey(id)) for (const st of doneSets(ex)) best = Math.max(best, e1rm(num(st.w), num(st.r)));
   }
   return best;
 }
