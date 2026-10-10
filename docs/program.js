@@ -94,6 +94,8 @@ export function swapOptions(name) {
 
 export const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 export const exId = (day, name) => `${day}:${slug(name)}`;
+// Identity of an exercise across days: "B:leg-press" and "A:leg-press" share history. Stored ids are never rewritten.
+export const exKey = (id) => id.replace(/^[ABC]:/, '');
 
 export function freshProgram() {
   const p = structuredClone(DEFAULT_PROGRAM);

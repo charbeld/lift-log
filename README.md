@@ -44,3 +44,18 @@ Bump `VERSION` in `docs/sw.js` on each deploy so phones pick up the new files.
 
 `cd worker && npm i --no-save http_ece && node test/webpush.test.mjs` checks the push payload
 encryption against the reference implementation and verifies the VAPID signature.
+
+## AI coach
+
+The Train tab's Coach card asks an OpenAI model for next-session targets for every exercise. The Worker
+(`POST /coach`) reads your workouts from D1, builds the history per program day, and sends it with the research
+notes in `worker/src/knowledge.js`. Every number in the reply is clamped before the app shows it (weights bounded
+around the last top weight, reps inside each day's range, unknown sources dropped).
+
+Setup, once:
+
+1. `cd worker && npx wrangler secret put OPENAI_API_KEY` (paste the key when asked; it is never stored in the repo)
+2. Optional: set `OPENAI_MODEL` in `wrangler.toml` `[vars]`. Default is `gpt-4.1-mini`.
+3. `npx wrangler deploy`
+
+Tests: `cd worker && node test/coach.test.mjs` (the OpenAI call is mocked).

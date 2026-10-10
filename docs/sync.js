@@ -90,6 +90,13 @@ export async function signOut() {
   commit('auth');
 }
 
+// Asks the Worker's coach for next-session targets. Syncs first so the server sees the latest workouts.
+export async function getCoachPlan() {
+  if (!status.enabled || !signedIn()) throw new Error('Sign in to get coach recommendations');
+  await syncNow();
+  return post('/coach', {});
+}
+
 export function scheduleSync(ms = 2500) {
   if (!status.enabled) return;
   clearTimeout(timer);

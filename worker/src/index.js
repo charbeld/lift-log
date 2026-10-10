@@ -3,6 +3,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { sendPush, b64u } from './webpush.js';
 import { verifyGoogleIdToken } from './google.js';
+import { recommend } from './coach.js';
 
 const cors = (env) => ({
   'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
@@ -98,6 +99,16 @@ async function schedule(req, env, user) {
 
 const timerFor = (env, user) => env.TIMERS.get(env.TIMERS.idFromName(user.id));
 
+// The coach reads the user's history from D1 itself, so the app never has to send its data.
+async function coach(req, env, user) {
+  if (!env.OPENAI_API_KEY) return json(env, { error: 'Coach is not set up (OPENAI_API_KEY)' }, 503);
+  const { results } = await env.DB.prepare('SELECT data FROM workouts WHERE user_id = ? AND deleted = 0').bind(user.id).all();
+  const prof = await env.DB.prepare('SELECT program FROM profiles WHERE user_id = ?').bind(user.id).first();
+  if (!prof) return json(env, { error: 'Sync your program first' }, 400);
+  const plan = await recommend(env, results.map((r) => JSON.parse(r.data)), JSON.parse(prof.program));
+  return json(env, plan);
+}
+
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(env) });
@@ -113,6 +124,7 @@ export default {
         case '/sync': return await sync(req, env, user);
         case '/schedule': return await schedule(req, env, user);
         case '/cancel': await timerFor(env, user).cancel(); return json(env, { ok: true });
+        case '/coach': return await coach(req, env, user);
         case '/logout':
           await env.DB.prepare('DELETE FROM auth_tokens WHERE token_hash = ?').bind(user.tokenHash).run();
           return json(env, { ok: true });

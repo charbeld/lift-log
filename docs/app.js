@@ -1,17 +1,17 @@
-import { PROGRESSION_RULE, swapOptions, exId, freshProgram } from './program.js';
+import { PROGRESSION_RULE, swapOptions, exId, exKey, freshProgram } from './program.js';
 import {
   state, save, commit, onChange, touchSession, touchProfile, replaceAll,
   todayStr, toDateStr, parseDate, weekFor, mondayOf, num, fmtKg, e1rm, fmtDur, fmtClock,
-  liveSessions, finishedSessions, doneSets, sessionStats, lastPerformance, suggestion,
+  liveSessions, finishedSessions, doneSets, sessionStats, lastPerformance, planFor,
   newSession, buildExercise, findItem, bestBefore,
 } from './store.js';
-import { initSync, scheduleSync, syncNow, signIn, signOut, signedIn, status as syncStatus } from './sync.js';
+import { initSync, scheduleSync, syncNow, signIn, signOut, signedIn, getCoachPlan, status as syncStatus } from './sync.js';
 import {
   startRest, stopRest, resumeTimer, unlockAudio, enablePush, disablePush, sendTestPush, pushConfigured, isStandalone,
 } from './timer.js';
 import { renderCharts } from './charts.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.3.0';
 const $ = (id) => document.getElementById(id);
 const view = $('view');
 const DAYS = ['A', 'B', 'C'];
@@ -168,7 +168,15 @@ function renderTrain() {
       <div class="meta">${p.items.length} exercises · ${last ? 'last done ' + relDate(last.date) : 'not done yet'}</div>
     </button>`;
   }).join('');
+  const plan = state.recs;
+  const coach = `<div class="card coach">
+      <div class="row"><div class="grow"><b>Coach</b><div class="small muted">${plan ? `Plan from ${relDate(toDateStr(new Date(plan.at)))} · ${Object.keys(plan.byKey).length} exercises` : 'Get next-session targets from your history and the research'}</div></div>
+      <button class="btn sm" data-act="coach-run">${plan ? 'Refresh' : 'Get plan'}</button></div>
+      ${plan?.summary ? `<p class="small" style="margin:8px 0 0">${esc(plan.summary)}</p>` : ''}
+      ${plan ? '<button class="link small" data-act="coach-show" style="margin-top:6px">See every exercise</button>' : ''}
+    </div>`;
   return `<div class="hero"><div class="eyebrow">Week ${weekFor(today)} · ${fmtDate(today)}</div><h1>Start a workout</h1></div>
+    ${coach}
     ${cards}
     <p style="text-align:center;margin-top:22px"><button class="link" data-act="log-past">Log a past workout</button></p>`;
 }
@@ -191,6 +199,7 @@ function renderSession(s, mode) {
         <div class="grow"><div class="t">${esc(w.name)} <span class="muted small">· ${esc(w.detail)}</span></div><div class="d">${esc(w.notes)}</div></div></div>`).join('')}
     </details>` : ''}
     <div id="exList">${s.exercises.map((ex, i) => exCard(s, ex, i)).join('')}</div>
+    <button class="btn block" data-act="add-ex-open" style="margin:4px 0 16px">${icon('plus')} Add exercise from a program</button>
     <label class="field"><span>Workout notes</span><textarea class="note" data-bind="snote" placeholder="How did it go? Energy, sleep, gym busy…">${esc(s.note)}</textarea></label>
     <div class="s-foot">
       ${mode === 'active'
@@ -203,7 +212,7 @@ function exCard(s, ex, i) {
   const item = findItem(s.day, ex.id);
   const key = s.date + s.startedAt;
   const last = lastPerformance(ex.id, s.id, key);
-  const sug = suggestion({ ...ex.target, inc: item?.inc ?? 2.5, start: item?.start || 'a comfortable weight' }, last);
+  const sug = planFor(ex.id, { ...ex.target, inc: item?.inc ?? 2.5, start: item?.start || 'a comfortable weight' }, last);
   const best = bestBefore(ex.id, key);
   const nDone = doneSets(ex).length;
   const complete = ex.sets.length && nDone >= ex.sets.length;
@@ -324,13 +333,13 @@ function renderWeekGrid() {
   const byWeek = new Map();
   for (const s of sessions) byWeek.set(s.week, s); // latest session in each week wins
   const weeks = [...byWeek.keys()].sort((a, b) => a - b);
-  const ids = [...state.program[d].items.map((it) => it.id)];
-  const names = Object.fromEntries(state.program[d].items.map((it) => [it.id, it.name]));
-  for (const s of sessions) for (const e of s.exercises) if (!ids.includes(e.id) && doneSets(e).length) { ids.push(e.id); names[e.id] = e.name; }
+  const ids = [...state.program[d].items.map((it) => exKey(it.id))];
+  const names = Object.fromEntries(state.program[d].items.map((it) => [exKey(it.id), it.name]));
+  for (const s of sessions) for (const e of s.exercises) if (!ids.includes(exKey(e.id)) && doneSets(e).length) { ids.push(exKey(e.id)); names[exKey(e.id)] = e.name; }
   const rows = ids.map((id) => {
     let prevTop = null;
     const cells = weeks.map((w) => {
-      const e = byWeek.get(w).exercises.find((x) => x.id === id);
+      const e = byWeek.get(w).exercises.find((x) => exKey(x.id) === id);
       const ds = e ? doneSets(e) : [];
       if (!ds.length) return '<td class="faint">–</td>';
       const top = Math.max(...ds.map((x) => num(x.w) || 0));
@@ -347,11 +356,12 @@ function renderWeekGrid() {
 // ----- Progress -----
 function exerciseCatalog() {
   const map = new Map();
-  for (const d of DAYS) for (const it of state.program[d].items) map.set(it.id, { id: it.id, name: it.name, day: d, n: 0 });
+  for (const d of DAYS) for (const it of state.program[d].items) if (!map.has(exKey(it.id))) map.set(exKey(it.id), { id: exKey(it.id), name: it.name, day: d, n: 0 });
   for (const s of finishedSessions()) for (const e of s.exercises) {
     if (!doneSets(e).length) continue;
-    if (!map.has(e.id)) map.set(e.id, { id: e.id, name: e.name, day: s.day, n: 0 });
-    map.get(e.id).n++;
+    const k = exKey(e.id);
+    if (!map.has(k)) map.set(k, { id: k, name: e.name, day: s.day, n: 0 });
+    map.get(k).n++;
   }
   return [...map.values()];
 }
@@ -427,7 +437,7 @@ function drawCharts() {
   });
   const id = ui.progressEx;
   const points = list.slice().reverse().map((s) => {
-    const e = s.exercises.find((x) => x.id === id);
+    const e = s.exercises.find((x) => exKey(x.id) === id);
     const ds = e ? doneSets(e) : [];
     if (!ds.length) return null;
     return {
@@ -664,6 +674,43 @@ const actions = {
     item.myNote = $('pinTxt').value.trim();
     touchProfile(); scheduleSync(); closeSheet(); render();
   },
+  async 'coach-run'(el) {
+    el.disabled = true; el.textContent = 'Thinking…';
+    try {
+      const plan = await getCoachPlan();
+      state.recs = { at: Date.now(), summary: plan.summary, byKey: Object.fromEntries(plan.exercises.map((e) => [e.key, e])) };
+      save(); render(); actions['coach-show']();
+    } catch (e) {
+      toast('Coach: ' + e.message, 5000);
+      el.disabled = false; el.textContent = 'Get plan';
+    }
+  },
+  'coach-show'() {
+    const p = state.recs;
+    if (!p) return;
+    openSheet(`<h2>Coach</h2><p class="small muted">${esc(p.summary)}</p>
+      ${DAYS.map((d) => `<h3>${esc(dayTitle(d))}</h3>${state.program[d].items.map((it) => {
+        const r = p.byKey[it.id];
+        if (!r) return '';
+        return `<div class="card p-item"><div class="row"><div class="grow"><b>${esc(it.name)}</b></div><span class="chip">${esc(r.action)}</span></div>
+          <div class="small" style="margin-top:6px"><b>${r.w != null ? fmtKg(r.w) + ' kg' : 'Choose a starting weight'}</b> · ${r.reps.join(' · ')} reps</div>
+          <div class="cue" style="margin-top:4px">${esc(r.rationale)}</div>
+          ${r.sources.length ? `<div class="small faint" style="margin-top:4px">${r.sources.map((s) => (s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}">${esc(s.id)}</a>` : `<span title="${esc(s.title)}">${esc(s.id)}</span>`)).join(' · ')}</div>` : ''}
+        </div>`;
+      }).join('')}`).join('')}
+      <div class="s-foot"><button class="btn block" data-close>Close</button></div>`);
+  },
+  'add-ex-open'() {
+    openSheet(`<h2>Add exercise</h2><p class="small muted">From any program. Its progress carries over from wherever you last did it.</p>
+      ${DAYS.map((d) => `<h3>${esc(dayTitle(d))}</h3>${state.program[d].items.map((it) => `<button class="menu-item" data-act="add-ex-go" data-id="${it.id}">${esc(it.name)} <span class="muted small">· ${it.sets} × ${it.repMin}–${it.repMax}</span></button>`).join('')}`).join('')}`);
+  },
+  'add-ex-go'(el) {
+    const s = cur(), item = findItem(s.day, el.dataset.id);
+    if (!item) return toast('That exercise is no longer in the program');
+    s.exercises.push(buildExercise(item, s.date + s.startedAt));
+    touchSession(s); scheduleSync(); closeSheet(); render();
+    toast(`Added ${item.name}`);
+  },
   'skip-ex'(el) { const s = cur(), i = +el.dataset.i; s.exercises[i].skipped = !s.exercises[i].skipped; touchSession(s); closeSheet(); render(); },
   'move-ex'(el) {
     const s = cur(), i = +el.dataset.i, d = +el.dataset.d, j = i + d;
@@ -672,7 +719,7 @@ const actions = {
     touchSession(s); closeSheet(); render();
   },
   'remove-ex'(el) { const s = cur(); s.exercises.splice(+el.dataset.i, 1); touchSession(s); closeSheet(); render(); },
-  'ex-progress'(el) { ui.progressEx = el.dataset.id; ui.tab = 'progress'; closeSheet(); render(); view.scrollTo(0, 0); },
+  'ex-progress'(el) { ui.progressEx = exKey(el.dataset.id); ui.tab = 'progress'; closeSheet(); render(); view.scrollTo(0, 0); },
   async finish() {
     const s = activeSession();
     const left = s.exercises.reduce((a, e) => a + (e.skipped ? 0 : e.sets.filter((x) => !x.done).length), 0);
