@@ -11,7 +11,7 @@ import {
 } from './timer.js';
 import { renderCharts } from './charts.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const $ = (id) => document.getElementById(id);
 const view = $('view');
 const DAYS = ['A', 'B', 'C'];
@@ -146,6 +146,24 @@ const activeSession = () => {
   return s && !s.deleted && !s.finishedAt ? s : null;
 };
 
+// ----- Coach plan -----
+// The plan refreshes itself when it is older than the latest workout, so there is nothing to press.
+let coachBusy = false, coachFailedAt = 0;
+function refreshCoach() {
+  const last = finishedSessions()[0];
+  const stale = !state.recs || (last && (state.recs.at || 0) < (last.updatedAt || 0));
+  if (!stale || coachBusy || !signedIn() || Date.now() - coachFailedAt < 10 * 60000) return;
+  coachBusy = true;
+  getCoachPlan().then((plan) => {
+    state.recs = { at: Date.now(), summary: plan.summary, explained: plan.explained, byKey: Object.fromEntries(plan.exercises.map((e) => [e.key, e])) };
+    save();
+    if (ui.tab === 'train' && !activeSession() && !ui.editingId && $('sheetWrap').hidden) render();
+  }).catch((e) => {
+    coachFailedAt = Date.now();
+    console.log('coach plan unavailable:', e.message);
+  }).finally(() => { coachBusy = false; });
+}
+
 // ----- Train -----
 function nextDay() {
   const last = finishedSessions()[0];
@@ -158,25 +176,27 @@ function renderTrain() {
   if (act) return renderSession(act, 'active');
   const today = todayStr();
   const next = nextDay();
+  refreshCoach();
   const cards = DAYS.map((d) => {
     const p = state.program[d];
     const last = finishedSessions().find((s) => s.day === d);
-    return `<button class="card day-card ${d === next ? 'next' : ''}" data-act="start" data-day="${d}">
-      <span class="letter">${d}</span>
-      ${d === next ? '<div class="tag">Up next</div>' : ''}
-      <h2>${esc(p.title)}</h2><p>${esc(p.subtitle)}</p>
-      <div class="meta">${p.items.length} exercises · ${last ? 'last done ' + relDate(last.date) : 'not done yet'}</div>
-    </button>`;
-  }).join('');
-  const plan = state.recs;
-  const coach = `<div class="card coach">
-      <div class="row"><div class="grow"><b>Coach</b><div class="small muted">${plan ? `Plan from ${relDate(toDateStr(new Date(plan.at)))} · ${Object.keys(plan.byKey).length} exercises` : 'Get next-session targets from your history and the research'}</div></div>
-      <button class="btn sm" data-act="coach-run">${plan ? 'Refresh' : 'Get plan'}</button></div>
-      ${plan?.summary ? `<p class="small" style="margin:8px 0 0">${esc(plan.summary)}</p>` : ''}
-      ${plan ? '<button class="link small" data-act="coach-show" style="margin-top:6px">See every exercise</button>' : ''}
+    const byKey = state.recs?.byKey;
+    const lines = byKey ? p.items.map((it) => {
+      const r = byKey[it.id];
+      if (!r) return '';
+      return `<li><span class="grow">${esc(it.name)}</span><span class="num">${r.w != null ? fmtKg(r.w) + ' kg' : '–'} · ${r.reps.join('/')}${r.action === 'increase' ? ' <span class="up">↑</span>' : ''}</span></li>`;
+    }).join('') : '';
+    return `<div class="card day-card ${d === next ? 'next' : ''}">
+      <button class="day-hit" data-act="start" data-day="${d}">
+        <span class="letter">${d}</span>
+        ${d === next ? '<div class="tag">Up next</div>' : ''}
+        <h2>${esc(p.title)}</h2><p>${esc(p.subtitle)}</p>
+        <div class="meta">${p.items.length} exercises · ${last ? 'last done ' + relDate(last.date) : 'not done yet'}</div>
+      </button>
+      ${lines ? `<div class="plan-h"><span>Next session · coach</span><button class="link" data-act="coach-show" data-day="${d}">Why</button></div><ul class="plan">${lines}</ul>` : ''}
     </div>`;
+  }).join('');
   return `<div class="hero"><div class="eyebrow">Week ${weekFor(today)} · ${fmtDate(today)}</div><h1>Start a workout</h1></div>
-    ${coach}
     ${cards}
     <p style="text-align:center;margin-top:22px"><button class="link" data-act="log-past">Log a past workout</button></p>`;
 }
@@ -674,22 +694,12 @@ const actions = {
     item.myNote = $('pinTxt').value.trim();
     touchProfile(); scheduleSync(); closeSheet(); render();
   },
-  async 'coach-run'(el) {
-    el.disabled = true; el.textContent = 'Thinking…';
-    try {
-      const plan = await getCoachPlan();
-      state.recs = { at: Date.now(), summary: plan.summary, explained: plan.explained, byKey: Object.fromEntries(plan.exercises.map((e) => [e.key, e])) };
-      save(); render(); actions['coach-show']();
-    } catch (e) {
-      toast('Coach: ' + e.message, 5000);
-      el.disabled = false; el.textContent = 'Get plan';
-    }
-  },
-  'coach-show'() {
+  'coach-show'(el) {
     const p = state.recs;
     if (!p) return;
+    const only = el.dataset.day;
     openSheet(`<h2>Coach</h2><p class="small muted">${esc(p.summary)}${p.explained === false ? ' (Explanations unavailable right now; the plan is still computed from your logs.)' : ''}</p>
-      ${DAYS.map((d) => `<h3>${esc(dayTitle(d))}</h3>${state.program[d].items.map((it) => {
+      ${DAYS.filter((d) => !only || d === only).map((d) => `<h3>${esc(dayTitle(d))}</h3>${state.program[d].items.map((it) => {
         const r = p.byKey[it.id];
         if (!r) return '';
         return `<div class="card p-item"><div class="row"><div class="grow"><b>${esc(it.name)}</b></div><span class="chip">${esc(r.action)}</span></div>
