@@ -1,12 +1,12 @@
-// AI coach: reads a user's workout history, asks an OpenAI model for next-session targets grounded in
-// the research in knowledge.js, then clamps every number so the model cannot invent or overreach.
+// AI coach. The numbers are computed here from the lifter's logs with fixed rules (double progression, plus a
+// conservative conversion for a new rep range). The model only explains each plan, citing the research notes.
 import { KNOWLEDGE, SOURCES, SOURCE_IDS } from './knowledge.js';
 
 const MODEL = 'gpt-4.1-mini'; // the model used in the other projects (structured JSON work)
 const TIMEOUT_MS = 25000;
-const MAX_EXERCISES = 40;
-const HISTORY_SESSIONS = 6;
-const ACTIONS = ['increase', 'hold', 'reps', 'reduce'];
+const MAX_SLOTS = 40;
+const HISTORY = 6;
+const ACTIONS = ['increase', 'reps', 'hold', 'reduce'];
 
 const num = (v) => {
   if (v === '' || v == null) return null;
@@ -17,14 +17,17 @@ const e1rm = (w, r) => (!w || !r ? 0 : r === 1 ? w : w * (1 + r / 30));
 const exKey = (id) => String(id).replace(/^[ABC]:/, '');
 const doneSets = (ex) => (ex.sets || []).filter((st) => st.done && num(st.r) != null);
 const fmt = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ''));
+const roundTo = (x, step) => +(Math.round(x / step) * step).toFixed(2);
+const sameRange = (a, b) => !!a && !!b && a.repMin === b.repMin && a.repMax === b.repMax;
+const setText = (s) => `${fmt(s.w)} kg x ${s.r ?? '-'}`;
 
-// One slot per program item (exercise + day, key = item id), since the same exercise can have a different
-// rep range on each day. The history of an exercise is shared across days by its name (exKey).
+// One slot per program item (exercise + day, key = item id). Its performances are the same exercise's sessions
+// from every day, oldest first, so a lift done on two days shares one history.
 export function buildHistory(workouts, program) {
   const sessions = workouts
     .filter((s) => s && !s.deleted && s.finishedAt)
     .sort((a, b) => (a.date + a.startedAt).localeCompare(b.date + b.startedAt));
-  const perf = new Map(); // exKey -> performances, oldest first
+  const perf = new Map();
   for (const s of sessions) {
     for (const ex of s.exercises || []) {
       const done = doneSets(ex);
@@ -32,7 +35,7 @@ export function buildHistory(workouts, program) {
       const k = exKey(ex.id);
       if (!perf.has(k)) perf.set(k, []);
       perf.get(k).push({
-        date: s.date, week: s.week, day: s.day,
+        date: s.date, day: s.day,
         target: ex.target ? { sets: ex.target.sets, repMin: ex.target.repMin, repMax: ex.target.repMax } : null,
         sets: done.map((st) => ({ w: num(st.w) || 0, r: num(st.r) })),
       });
@@ -41,22 +44,87 @@ export function buildHistory(workouts, program) {
   const slots = [];
   for (const day of Object.keys(program || {})) {
     for (const it of program[day].items || []) {
-      const p = perf.get(exKey(it.id)) || [];
-      const recent = p.slice(-HISTORY_SESSIONS);
-      const last = recent[recent.length - 1];
       slots.push({
         key: it.id, name: it.name, day, inc: it.inc ?? 2.5,
         target: { sets: it.sets, repMin: it.repMin, repMax: it.repMax, rest: it.rest },
-        lastTop: last ? Math.max(...last.sets.map((x) => x.w)) : null,
-        history: recent.map((x) => ({
-          date: x.date, week: x.week, day: x.day, target: x.target,
-          sets: x.sets.map((y) => `${fmt(y.w)}kg x ${y.r ?? '-'}`).join(', '),
-        })),
+        perf: (perf.get(exKey(it.id)) || []).slice(-HISTORY),
       });
     }
   }
-  return slots.slice(0, MAX_EXERCISES);
+  return slots.slice(0, MAX_SLOTS);
 }
+
+const rangeText = (t) => (t ? `${t.repMin}–${t.repMax} reps` : 'unknown range');
+const rule = (action, w, reps, basis, sources, facts) => ({ action, w, reps, basis, sources, facts });
+
+// The plan for one slot, from its own rep range. Returns the action, weight, reps, and the facts it was based on.
+export function computeRule(slot) {
+  const { sets: n, repMin, repMax } = slot.target;
+  const count = n > 0 ? n : 3;
+  const step = slot.inc > 0 ? slot.inc : 2.5;
+  const minReps = Array(count).fill(repMin);
+  const last = slot.perf[slot.perf.length - 1];
+  const same = slot.perf.filter((p) => sameRange(p.target, slot.target));
+
+  if (!last) {
+    return rule('hold', null, minReps, 'none', ['H1'],
+      `No logged sessions for ${slot.name} yet, so there is nothing to progress from. Start at ${repMin} reps and pick a weight you can control for the whole range.`);
+  }
+  if (!same.length) {
+    // No session in this rep range yet: convert the best set of the last session with the Epley estimate, then go 5% lower.
+    const best = last.sets.reduce((a, s) => (e1rm(s.w, s.r) > e1rm(a.w, a.r) ? s : a), last.sets[0]);
+    const est = e1rm(best.w, best.r);
+    const w = roundTo((est / (1 + repMin / 30)) * 0.95, step);
+    return rule('hold', w || null, minReps, 'converted', ['H1', 'S1'],
+      `No session yet in ${repMin}–${repMax} reps. Last session ${last.date} was ${rangeText(last.target)}; its best set was ${setText(best)}, an estimated 1RM of ${fmt(roundTo(est, 0.5))} kg. Converted to ${repMin} reps and taken 5% lower: ${fmt(w)} kg.`);
+  }
+
+  const cur = same[same.length - 1];
+  const T = Math.max(...cur.sets.map((s) => s.w));
+  const top = cur.sets.filter((s) => s.w === T);
+  const weightOut = T > 0 ? T : null;
+  const lastTxt = `Last session in ${repMin}–${repMax} reps (${cur.date}): ${cur.sets.map(setText).join(', ')}.`;
+
+  // Double progression: every set at the top weight reached the top of the range.
+  if (slot.inc > 0 && top.length >= count && top.every((s) => s.r >= repMax)) {
+    const next = T + step;
+    return rule('increase', next, minReps, 'same-range', ['S2', 'S4', 'S1'],
+      `${lastTxt} All ${count} sets at ${fmt(T)} kg reached ${repMax} reps, so the weight goes up by ${fmt(step)} kg to ${fmt(next)} kg and reps reset to ${repMin}.`);
+  }
+
+  // Two sessions in a row with fewer total reps at the same weight: back off.
+  const three = same.slice(-3);
+  if (three.length === 3 && three.every((p) => Math.max(...p.sets.map((s) => s.w)) === T)) {
+    const reps3 = three.map((p) => sum(p.sets.map((s) => s.r)));
+    if (reps3[0] > reps3[1] && reps3[1] > reps3[2]) {
+      const w = roundTo(T * 0.9, step);
+      return rule('reduce', w || null, minReps, 'same-range', ['H1'],
+        `${lastTxt} Total reps at ${fmt(T)} kg fell for two sessions in a row (${reps3.join(' → ')}), so the weight comes down about 10% to ${fmt(w)} kg.`);
+    }
+  }
+
+  // Mixed weights last time (the top weight was not used for every set): nothing to progress from yet.
+  if (top.length < count) {
+    return rule('hold', weightOut, minReps, 'same-range', ['S2'],
+      `${lastTxt} Only ${top.length} of ${count} sets were done at the top weight ${fmt(T)} kg, so no progression is applied yet. Keep ${fmt(T)} kg and aim to do every set at it.`);
+  }
+
+  // A set below the bottom of the range: keep the weight and work back to the range.
+  if (top.some((s) => s.r < repMin)) {
+    return rule('hold', weightOut, minReps, 'same-range', ['S2'],
+      `${lastTxt} A set at ${fmt(T)} kg fell below ${repMin} reps, so the weight stays at ${fmt(T)} kg until every set reaches ${repMin}.`);
+  }
+
+  // Otherwise: same weight, one more rep per set (capped at the top of the range).
+  const reps = Array.from({ length: count }, (_, i) => {
+    const base = (top[i] ?? top[top.length - 1] ?? cur.sets[cur.sets.length - 1]).r;
+    return Math.min(repMax, Math.max(repMin, base + 1));
+  });
+  return rule('reps', weightOut, reps, 'same-range', ['S2', 'S3', 'S1'],
+    `${lastTxt} Not every set reached ${repMax} at ${fmt(T)} kg yet, so the weight stays and each set adds one rep, aiming for ${reps.join(' / ')}.`);
+}
+
+const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 
 const PLAN_SCHEMA = {
   type: 'object',
@@ -69,75 +137,28 @@ const PLAN_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'action', 'weight_kg', 'reps', 'rationale', 'sources'],
+        required: ['key', 'rationale'],
         properties: {
           key: { type: 'string' },
-          action: { type: 'string', enum: ACTIONS },
-          weight_kg: { type: ['number', 'null'] },
-          reps: { type: 'array', items: { type: 'integer' } },
           rationale: { type: 'string' },
-          sources: { type: 'array', items: { type: 'string', enum: SOURCE_IDS } },
         },
       },
     },
   },
 };
 
-const SYSTEM = `You are a strength coach that plans the next session for each exercise in a lifter's app.
-You receive one entry per exercise per program day (key = its id, with that day's target). The same exercise can appear on
-several days with different rep ranges (sometimes as a main lift, sometimes as an accessory). Its history from all days is
-included, but judge progression only from sessions done in the same rep range as this entry's target (see H1).
-Plan this entry's next session against its own target.
+const SYSTEM = `You explain strength plans for a lifter's app. For each exercise you get its computed plan: the action,
+weight_kg, reps, and the facts from the lifter's logs that the rule used. These numbers are final. Do not change,
+recalculate, or question them.
 
-Progression rules (use the sources cited in the research notes):
-- increase: every set of the most recent matching session reached repMax at lastTop kg. Next: weight_kg = lastTop + inc, reps = repMin per set.
-- reps: sets did not all reach repMax. Keep lastTop kg and add one rep per set (capped at repMax).
-- hold: performance slipped or is unclear. Keep the same weight and reps.
-- reduce: reps dropped at the same weight for two sessions in a row. Lower weight_kg by about 5-10%.
-- No matching history: weight_kg null, reps at repMin, action hold, and say in rationale that there is no history for this range.
-Never invent numbers that are not supported by the history. Keep rationale to one or two short sentences that name the
-data used. List only source ids from the research notes that you actually relied on.
+For each exercise, write a rationale of one or two plain sentences that:
+- restates the facts exactly as given (dates, weights, reps, rep range), and
+- names the research that supports the action, citing its id from the notes below (for example [S2]). Use only ids that appear in the notes.
+
+Keep the summary to one or two sentences about the session as a whole. Reply with JSON only, matching the schema.
 
 Research notes:
-${KNOWLEDGE}
-
-Reply with JSON only, matching the schema.`;
-
-const round = (x, step) => Math.round(x / step) * step;
-
-// The model proposes; this decides what the app is allowed to show.
-export function clampPlan(raw, exercises) {
-  const out = [];
-  for (const ex of exercises) {
-    const r = (raw?.exercises || []).find((e) => e.key === ex.key);
-    if (!r) continue;
-    const step = ex.inc > 0 ? ex.inc : 2.5;
-    const top = ex.lastTop;
-    let w = null;
-    if (top != null) {
-      if (Number.isFinite(r.weight_kg)) {
-        const lo = top * 0.85, hi = top + Math.max(2 * step, 0.1 * top);
-        w = +round(Math.min(hi, Math.max(lo, r.weight_kg)), step).toFixed(2);
-      } else {
-        w = top;
-      }
-    }
-    const { sets, repMin, repMax } = ex.target;
-    const n = sets > 0 ? sets : 3;
-    const reps = Array.from({ length: n }, (_, i) => {
-      const v = Number.isFinite(r.reps?.[i]) ? Math.round(r.reps[i]) : repMin;
-      return Math.min(repMax, Math.max(repMin, v));
-    });
-    out.push({
-      key: ex.key, name: ex.name,
-      action: ACTIONS.includes(r.action) ? r.action : 'hold',
-      w, reps,
-      rationale: String(r.rationale || '').slice(0, 300),
-      sources: SOURCES.filter((s) => (r.sources || []).includes(s.id)).map(({ id, title, url }) => ({ id, title, url })),
-    });
-  }
-  return { summary: String(raw?.summary || '').slice(0, 400), exercises: out };
-}
+${KNOWLEDGE}`;
 
 export async function askCoach(env, input, fetchImpl = fetch) {
   const ctrl = new AbortController();
@@ -151,7 +172,7 @@ export async function askCoach(env, input, fetchImpl = fetch) {
         model: env.OPENAI_MODEL || MODEL,
         temperature: 0.2,
         max_completion_tokens: 2500, // a cap stops runaway JSON output (see LEARNING.md, gpt-4.1-mini runaway)
-        response_format: { type: 'json_schema', json_schema: { name: 'coach_plan', strict: true, schema: PLAN_SCHEMA } },
+        response_format: { type: 'json_schema', json_schema: { name: 'coach_explanations', strict: true, schema: PLAN_SCHEMA } },
         messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: JSON.stringify(input) }],
       }),
     });
@@ -165,9 +186,43 @@ export async function askCoach(env, input, fetchImpl = fetch) {
   }
 }
 
+// Combines the computed plans with the model's explanations. The model supplies text only; if it is missing,
+// the facts stand in as the rationale.
+export function assemble(rules, raw) {
+  const byKey = new Map((raw?.exercises || []).map((e) => [e.key, e]));
+  return {
+    summary: String(raw?.summary || 'Next-session targets from your logged sessions.').slice(0, 400),
+    exercises: rules.map(({ slot, rule: r }) => {
+      const text = byKey.get(slot.key)?.rationale;
+      return {
+        key: slot.key, name: slot.name,
+        action: ACTIONS.includes(r.action) ? r.action : 'hold',
+        w: r.w, reps: r.reps,
+        facts: r.facts,
+        rationale: String(text || r.facts).slice(0, 400),
+        sources: SOURCES.filter((s) => r.sources.includes(s.id) && SOURCE_IDS.includes(s.id)).map(({ id, title, url }) => ({ id, title, url })),
+      };
+    }),
+  };
+}
+
 export async function recommend(env, workouts, program, fetchImpl) {
-  const exercises = buildHistory(workouts, program);
-  if (!exercises.length) return { summary: 'No finished workouts yet. Log a session first.', exercises: [], at: Date.now() };
-  const raw = await askCoach(env, { exercises }, fetchImpl);
-  return { ...clampPlan(raw, exercises), at: Date.now() };
+  const slots = buildHistory(workouts, program);
+  const at = Date.now();
+  if (!slots.length) return { summary: 'No program yet. Sync your program first.', exercises: [], at, explained: false };
+  const rules = slots.map((slot) => ({ slot, rule: computeRule(slot) }));
+  let raw = null;
+  let explained = true;
+  try {
+    raw = await askCoach(env, {
+      exercises: rules.map(({ slot, rule: r }) => ({
+        key: slot.key, name: slot.name, day: slot.day, target: slot.target,
+        action: r.action, weight_kg: r.w, reps: r.reps, facts: r.facts,
+      })),
+    }, fetchImpl);
+  } catch (e) {
+    explained = false; // the plan itself is still computed from the logs
+    console.log('coach explanation unavailable', e.message);
+  }
+  return { ...assemble(rules, raw), at, explained };
 }
