@@ -1,6 +1,7 @@
 // AI coach. The numbers are computed here from the lifter's logs with fixed rules (double progression, plus a
 // conservative conversion for a new rep range). The model only explains each plan, citing the research notes.
 import { KNOWLEDGE, SOURCES, SOURCE_IDS } from './knowledge.js';
+import { PROGRAM_RULES, musclesFor } from './program-kb.js';
 
 const MODEL = 'gpt-6-luna'; // lowest-cost GPT-6 tier; cheap enough for structured JSON work (override with OPENAI_MODEL)
 const TIMEOUT_MS = 25000;
@@ -254,23 +255,25 @@ const MERGE_SCHEMA = {
   },
 };
 
-const MERGE_SYSTEM = `You combine a lifter's skipped training day with the day that is due now, into ONE session.
-The lifter's app gives you every exercise of both days with its target sets, rep range, rest, and the computed plan
+const MERGE_SYSTEM = `You build ONE training session for a lifter who missed scheduled days. The lifter's app gives you
+the whole exercise library (every exercise of their program) with its role: "owed" (from a missed day), "due" (today's
+day), or "library" (another day). Each exercise has its target sets, rep range, rest, muscles and the computed plan
 (weight_kg, reps, action, facts). The weights and reps are final: do not change or question them.
 
 Rules:
+- Build the session only from exercises in the library. Use only keys from the input. Return "sets" as an integer.
 - The whole session must fit in budget_minutes, warm-up included (warmup_minutes). Time per exercise is
   sets × (about 40 seconds of work + its rest_sec). Cut sets or drop the least important exercises to fit. Keep
   at least 2 sets for any exercise you keep.
-- Keep the main lifts of each day where you can. Drop exercises that repeat the same movement pattern when both
-  days cover it, and never list the same exercise twice.
+- Follow the program knowledge below for which patterns to cover and what to prefer.
 - Order the list as the session should be done: heavy compounds first, isolation and core last.
-- Use only keys from the input. Return "sets" as an integer.
 - For each exercise you keep, write a rationale of one or two plain sentences: say why it stays, and cite the
   research id that supports the choice (for example [S2]). Use only ids that appear in the notes.
 - The summary is one or two sentences: which days were combined and what was cut to fit.
 
 Reply with JSON only, matching the schema.
+
+${PROGRAM_RULES}
 
 Research notes:
 ${KNOWLEDGE}`;
@@ -278,17 +281,20 @@ ${KNOWLEDGE}`;
 export const sessionMinutes = (exs) =>
   WARMUP_MIN + exs.reduce((a, e) => a + (e.sets * (WORK_SEC + e.rest)) / 60, 0);
 
-// Every exercise of the owed days and the due day, one per lift (due day first), each with its computed plan.
+// The whole library, one per lift, each with its computed plan and role. The due day comes first, then the owed
+// days, then the other days. Only owed and due exercises are the fallback when the model is unavailable.
 export function mergeCandidates(workouts, program, owed, due) {
   const slots = buildHistory(workouts, program);
   const seen = new Set();
   const out = [];
-  for (const day of [due, ...owed]) {
+  const order = [due, ...owed, ...Object.keys(program).filter((d) => d !== due && !owed.includes(d))];
+  for (const day of order) {
+    const role = day === due ? 'due' : owed.includes(day) ? 'owed' : 'library';
     for (const slot of slots.filter((s) => s.day === day)) {
       const k = exKey(slot.key);
       if (seen.has(k)) continue;
       seen.add(k);
-      out.push({ slot, rule: computeRule(slot), item: program[day].items.find((it) => it.id === slot.key) });
+      out.push({ slot, role, rule: computeRule(slot), item: program[day].items.find((it) => it.id === slot.key) });
     }
   }
   return out;
@@ -296,7 +302,8 @@ export function mergeCandidates(workouts, program, owed, due) {
 
 export async function mergeSession(env, workouts, program, owed, due, fetchImpl = fetch) {
   const cands = mergeCandidates(workouts, program, owed, due);
-  if (!cands.length) throw new Error('No exercises to combine');
+  const ownDays = cands.filter((c) => c.role !== 'library');
+  if (!ownDays.length) throw new Error('No exercises to combine');
   const byKey = new Map(cands.map((c) => [c.slot.key, c]));
   let raw = null;
   try {
@@ -304,10 +311,10 @@ export async function mergeSession(env, workouts, program, owed, due, fetchImpl 
       budget_minutes: BUDGET_MIN,
       warmup_minutes: WARMUP_MIN,
       days: { owed, due },
-      exercises: cands.map(({ slot, rule: r, item }) => ({
-        key: slot.key, name: slot.name, day: slot.day, category: item.cat,
+      library: cands.map(({ slot, role, rule: r, item }) => ({
+        key: slot.key, name: slot.name, day: slot.day, role, muscles: musclesFor(slot.name), category: item.cat,
         target_sets: slot.target.sets, rep_min: slot.target.repMin, rep_max: slot.target.repMax, rest_sec: slot.target.rest,
-        action: r.action, weight_kg: r.w, reps: r.reps, facts: r.facts,
+        cue: item.notes || '', action: r.action, weight_kg: r.w, reps: r.reps, facts: r.facts,
       })),
     }, fetchImpl, { system: MERGE_SYSTEM, schema: MERGE_SCHEMA, name: 'combined_session' });
   } catch (e) {
@@ -325,7 +332,7 @@ export async function mergeSession(env, workouts, program, owed, due, fetchImpl 
     picked.push({ c, sets, rationale: String(line.rationale || c.rule.facts).slice(0, 400) });
   }
   const explained = picked.length > 0;
-  if (!explained) picked = cands.map((c) => ({ c, sets: c.slot.target.sets, rationale: c.rule.facts }));
+  if (!explained) picked = ownDays.map((c) => ({ c, sets: c.slot.target.sets, rationale: c.rule.facts }));
 
   // The budget is enforced here, not trusted to the model: drop from the end (the least important) until it fits.
   const len = () => sessionMinutes(picked.map((p) => ({ sets: p.sets, rest: p.c.slot.target.rest })));

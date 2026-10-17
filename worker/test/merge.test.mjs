@@ -57,4 +57,19 @@ const small = await mergeSession({ OPENAI_API_KEY: 'x' }, [], program, ['C'], 'C
 assert.equal(small.exercises.length, 1);
 assert.equal(small.minutes, Math.round(sessionMinutes([{ sets: 3, rest: 150 }])));
 
+// 5. The model gets the whole library with roles and muscles, and may use a lift from a day that is not owed or due.
+const withA = { ...program, A: { items: [ex('A:bench', 'Bench Press (Smith or DB)', 'MACHINE', 4, 8, 10, 150)] } };
+let sent = null;
+const libModel = async (url, opts) => { sent = JSON.parse(opts.body); return fakeModel({ summary: 's', exercises: [{ key: 'A:bench', sets: 3, rationale: 'chest [S2]' }, { key: 'B:hack', sets: 4, rationale: 'legs [S2]' }] })(); };
+const lib = await mergeSession({ OPENAI_API_KEY: 'x' }, [], withA, ['B'], 'C', libModel);
+const payload = JSON.parse(sent.messages[1].content);
+assert.deepEqual(payload.library.map((e) => e.role).filter((r, i, a) => a.indexOf(r) === i), ['due', 'owed', 'library'], 'roles: due, owed, then library');
+assert.equal(payload.library.find((e) => e.key === 'A:bench').muscles, 'chest, triceps, front delts', 'muscles come from the knowledge base');
+assert.match(sent.messages[0].content, /Program knowledge for building one combined session/, 'program rules are in the system prompt');
+assert.deepEqual(lib.exercises.map((e) => e.key), ['A:bench', 'B:hack'], 'a library lift from another day is accepted');
+
+// 6. Without the model, only the owed and due days are used.
+const fb = await mergeSession({ OPENAI_API_KEY: 'x' }, [], withA, ['B'], 'C', async () => new Response('no', { status: 500 }));
+assert.ok(fb.exercises.every((e) => e.day !== 'A'), 'fallback uses owed and due days only');
+
 console.log('merge tests passed');

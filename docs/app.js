@@ -173,12 +173,12 @@ const shift = (letter, n) => DAYS[(DAYS.indexOf(letter) + n) % 3];
 const addDays = (s, n) => { const d = parseDate(s); return toDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)); };
 const trainDays = () => state.settings.trainDays || [1, 3, 5]; // Mon, Wed, Fri by default (0 = Sunday)
 
-// The scheduled training days in the last 14 days (before today) with no workout logged on that date. Each gets the
-// program day it stands for: the rotation follows the logged workouts, so a workout resets it to the day after its own.
-// Returns the slots (with their answer: 'skipped', 'trained', 'combined', 'dropped' or none) and the day due today.
+// The scheduled training days of this week (Monday to today, not counting today) with no workout logged on that date.
+// Each gets the program day it stands for: the rotation follows the logged workouts, so a workout resets it to the day
+// after its own. Returns the slots (with their answer: 'skipped', 'trained', 'combined', 'dropped' or none) and the day due today.
 function pastSlots() {
-  const today = todayStr(), floor = addDays(today, -14);
-  const start = state.settings.startDate && state.settings.startDate > floor ? state.settings.startDate : floor;
+  const today = todayStr(), monday = toDateStr(mondayOf(parseDate(today)));
+  const start = state.settings.startDate && state.settings.startDate > monday ? state.settings.startDate : monday;
   const sessions = finishedSessions(); // newest first
   const answers = state.settings.skips || {}, days = trainDays();
   const before = sessions.find((s) => s.date < start);
