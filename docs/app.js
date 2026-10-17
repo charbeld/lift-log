@@ -173,23 +173,33 @@ const shift = (letter, n) => DAYS[(DAYS.indexOf(letter) + n) % 3];
 const addDays = (s, n) => { const d = parseDate(s); return toDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)); };
 const trainDays = () => state.settings.trainDays || [1, 3, 5]; // Mon, Wed, Fri by default (0 = Sunday)
 
-// The scheduled training days since the last finished workout (or the program start, at most 14 days back),
-// each with the program day it stands for and its answer ('skipped', 'trained', 'combined', 'dropped' or none).
+// The scheduled training days in the last 14 days (before today) with no workout logged on that date. Each gets the
+// program day it stands for: the rotation follows the logged workouts, so a workout resets it to the day after its own.
+// Returns the slots (with their answer: 'skipped', 'trained', 'combined', 'dropped' or none) and the day due today.
 function pastSlots() {
-  const last = finishedSessions()[0]?.date || state.settings.startDate;
-  if (!last) return [];
-  const today = todayStr(), floor = addDays(today, -14), from = last > floor ? last : floor;
-  const days = trainDays(), answers = state.settings.skips || {}, out = [];
-  for (let d = addDays(from, 1); d < today; d = addDays(d, 1)) if (days.includes(parseDate(d).getDay())) out.push(d);
-  return out.map((date, i) => ({ date, day: shift(nextDay(), i), answer: answers[date] || null }));
+  const today = todayStr(), floor = addDays(today, -14);
+  const start = state.settings.startDate && state.settings.startDate > floor ? state.settings.startDate : floor;
+  const sessions = finishedSessions(); // newest first
+  const answers = state.settings.skips || {}, days = trainDays();
+  const before = sessions.find((s) => s.date < start);
+  let letter = before ? shift(before.day, 1) : 'A';
+  const slots = [];
+  for (let d = start; d < today; d = addDays(d, 1)) {
+    const done = sessions.find((s) => s.date === d);
+    if (done) { letter = shift(done.day, 1); continue; }
+    if (!days.includes(parseDate(d).getDay())) continue;
+    slots.push({ date: d, day: letter, answer: answers[d] || null });
+    letter = shift(letter, 1);
+  }
+  return { slots, due: letter };
 }
 
 // Skipped days waiting to be made up, and the day that is due now after them.
 function skipPlan() {
-  const slots = pastSlots();
+  const { slots, due } = pastSlots();
   const skipped = slots.filter((s) => s.answer === 'skipped');
   if (!skipped.length) return null;
-  return { dates: skipped.map((s) => s.date), owed: skipped.map((s) => s.day), due: shift(nextDay(), slots.length) };
+  return { dates: skipped.map((s) => s.date), owed: skipped.map((s) => s.day), due };
 }
 
 function renderTrain() {
@@ -200,11 +210,11 @@ function renderTrain() {
   const next = nextDay();
   refreshCoach();
   const plan = skipPlan();
-  const missed = pastSlots().filter((s) => !s.answer).slice(0, 3);
+  const missed = pastSlots().slots.filter((s) => !s.answer).slice(0, 3);
   const missedCard = missed.length ? `<div class="card missed"><div class="eyebrow">Did you skip?</div>${missed.map((m) => `<p><b>${fmtDate(m.date)}</b> · ${esc(dayTitle(m.day))}</p>
       <div class="row" style="gap:10px;margin-bottom:10px"><button class="btn sm grow" data-act="miss-answer" data-date="${m.date}" data-v="skipped">Yes, skipped</button><button class="btn sm grow" data-act="miss-answer" data-date="${m.date}" data-v="trained">No, I trained</button></div>`).join('')}</div>` : '';
   const comboCard = plan ? `<div class="card combo"><div class="eyebrow">Skipped · ${plan.dates.map(fmtShort).join(', ')}</div>
-      <h2>${plan.owed.map((d) => esc(dayTitle(d))).join(' + ')} + ${esc(dayTitle(plan.due))}</h2>
+      <h2>${[...new Set([...plan.owed, plan.due])].map((d) => esc(dayTitle(d))).join(' + ')}</h2>
       <p class="muted small">One session for the skipped day and the day due now, at most 90 minutes.</p>
       <div class="row" style="gap:14px"><button class="btn primary grow" data-act="combo-start">Build combined session</button><button class="link" data-act="combo-forget">Forget it</button></div></div>` : '';
   const cards = DAYS.map((d) => {
@@ -634,7 +644,7 @@ const actions = {
   },
   'combo-forget'() {
     const skips = { ...(state.settings.skips || {}) };
-    for (const s of pastSlots()) if (s.answer === 'skipped') skips[s.date] = 'dropped';
+    for (const s of pastSlots().slots) if (s.answer === 'skipped') skips[s.date] = 'dropped';
     state.settings.skips = skips; touchProfile(); scheduleSync(); render();
   },
   async 'combo-start'() {
