@@ -10,6 +10,7 @@ import {
   startRest, stopRest, resumeTimer, unlockAudio, enablePush, disablePush, sendTestPush, pushConfigured, isStandalone,
 } from './timer.js';
 import { renderCharts } from './charts.js';
+import { demoHtml } from './demos.js';
 
 const VERSION = '1.4.0';
 const $ = (id) => document.getElementById(id);
@@ -298,6 +299,7 @@ function exCard(s, ex, i) {
       </div>
       <button class="icon-btn" data-act="ex-menu" data-i="${i}" aria-label="Exercise options">${icon('more')}</button>
     </div>
+    ${demoHtml(ex.name, esc)}
     ${cue ? `<p class="cue">${esc(cue)}</p>` : ''}
     ${item?.myNote ? `<div class="mynote">${esc(item.myNote)}</div>` : ''}
     ${ex.skipped ? '' : `<div class="last">${lastLine}<div class="sug ${sug.up ? 'up' : ''}">${sug.up ? '↑ ' : ''}${esc(sug.text)}</div></div>
@@ -528,6 +530,7 @@ function renderProgram() {
   const items = p.items.map((it, i) => `<div class="card p-item">
       <div class="row"><div class="grow"><h2>${esc(it.name)}</h2>
         <div class="ex-meta"><span class="chip ${it.cat}">${catLabel[it.cat] || it.cat}</span><span>${it.sets} × ${it.repMin}–${it.repMax}</span><span>rest ${fmtClock(it.rest)}</span><span>+${fmtKg(it.inc)} kg</span></div></div></div>
+      ${demoHtml(it.name, esc)}
       <div class="small muted" style="margin-top:6px">Starting weight: ${esc(it.start)}</div>
       ${it.notes ? `<p class="cue">${esc(it.notes)}</p>` : ''}
       ${it.myNote ? `<div class="mynote">${esc(it.myNote)}</div>` : ''}
@@ -725,7 +728,7 @@ const actions = {
     const orig = item?.origName && item.origName !== ex.name ? [item.origName] : [];
     const opts = [...new Set([...orig, ...swapOptions(item?.origName || ex.name), ...swapOptions(ex.name)])].filter((n) => n !== ex.name);
     openSheet(`<h2>Swap ${esc(ex.name)}</h2>
-      ${opts.map((n) => `<button class="menu-item" data-act="swap-go" data-i="${i}" data-name="${esc(n)}">${esc(n)}</button>`).join('') || '<p class="muted small">No suggested swaps for this one.</p>'}
+      ${opts.map((n) => `<button class="menu-item has-demo" data-act="swap-go" data-i="${i}" data-name="${esc(n)}">${demoHtml(n, esc)}<span>${esc(n)}</span></button>`).join('') || '<p class="muted small">No suggested swaps for this one.</p>'}
       <label class="field"><span>Or type another exercise</span><input id="swapCustom" placeholder="Exercise name"></label>
       <label class="toggle"><span class="grow"><b>Also change it in the program</b><div class="small muted">Off = only for today</div></span><input type="checkbox" id="swapPerm" checked></label>
       <div class="s-foot"><button class="btn primary block" data-act="swap-go" data-i="${i}">Use typed name</button></div>`);
@@ -877,7 +880,7 @@ const actions = {
     const i = +el.dataset.i, it = state.program[ui.programDay].items[i];
     const opts = [...new Set([...(it.origName && it.origName !== it.name ? [it.origName] : []), ...swapOptions(it.origName || it.name), ...swapOptions(it.name)])].filter((n) => n !== it.name);
     openSheet(`<h2>Swap ${esc(it.name)}</h2>
-      ${opts.map((n) => `<button class="menu-item" data-act="p-swap-go" data-i="${i}" data-name="${esc(n)}">${esc(n)}</button>`).join('') || '<p class="muted small">No suggested swaps.</p>'}
+      ${opts.map((n) => `<button class="menu-item has-demo" data-act="p-swap-go" data-i="${i}" data-name="${esc(n)}">${demoHtml(n, esc)}<span>${esc(n)}</span></button>`).join('') || '<p class="muted small">No suggested swaps.</p>'}
       <label class="field"><span>Or type another exercise</span><input id="swapCustom"></label>
       <div class="s-foot"><button class="btn primary block" data-act="p-swap-go" data-i="${i}">Use typed name</button></div>`);
   },

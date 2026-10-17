@@ -65,6 +65,7 @@ const lib = await mergeSession({ OPENAI_API_KEY: 'x' }, [], withA, ['B'], 'C', l
 const payload = JSON.parse(sent.messages[1].content);
 assert.deepEqual(payload.library.map((e) => e.role).filter((r, i, a) => a.indexOf(r) === i), ['due', 'owed', 'library'], 'roles: due, owed, then library');
 assert.equal(payload.library.find((e) => e.key === 'A:bench').muscles, 'chest, triceps, front delts', 'muscles come from the knowledge base');
+assert.equal(payload.library.find((e) => e.key === 'B:hack').pattern, 'squat', 'each lift carries its movement pattern');
 assert.match(sent.messages[0].content, /Program knowledge for building one combined session/, 'program rules are in the system prompt');
 assert.deepEqual(lib.exercises.map((e) => e.key), ['A:bench', 'B:hack'], 'a library lift from another day is accepted');
 

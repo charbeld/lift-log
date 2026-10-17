@@ -147,6 +147,14 @@ details.warmups summary::-webkit-details-marker { display: none; }
 .ex.complete .ex-n { background: var(--accent); color: var(--accent-ink); }
 .ex-meta { margin-top: 5px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .cue { margin: 10px 0 0; font-size: 14px; color: #b7c0c6; line-height: 1.45; }
+/* Exercise demo: two photos (start / end position), the second fading over the first to show the movement. */
+.demo { position: relative; margin-top: 12px; width: 100%; max-width: 260px; aspect-ratio: 3 / 2; border-radius: 12px; overflow: hidden; background: #fff; }
+.demo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.demo img + img { animation: demo-flip 2.4s ease-in-out infinite; }
+@keyframes demo-flip { 0%, 40% { opacity: 0; } 50%, 90% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .demo img + img { animation: none; opacity: 0; } }
+.menu-item.has-demo { min-height: 64px; padding: 6px 4px; }
+.menu-item .demo { margin: 0; width: 72px; flex: none; border-radius: 8px; }
 .mynote { margin-top: 8px; font-size: 14px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 200, 87, 0.08); color: #f3d79a; }
 .last { margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 14px; }
 .last .l1 { color: var(--muted); }
