@@ -301,3 +301,5 @@ select.pick {
 .p-actions { display: flex; gap: 6px; margin-top: 10px; }
 .p-actions .icon-btn { width: 40px; height: 40px; background: var(--surface-2); }
 .rule { font-size: 14px; color: #c9d0d4; border-left: 3px solid var(--accent); }
+.card.combo, .card.missed { border-color: var(--accent); margin-bottom: 14px; }
+.card.missed p { margin: 6px 0 8px; }

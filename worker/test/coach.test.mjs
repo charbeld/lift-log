@@ -82,7 +82,7 @@ const fakeFetch = async (url, init) => {
 const plan = await recommend({ OPENAI_API_KEY: 'sk-test' }, workouts, program2, fakeFetch);
 assert.equal(sent.url, 'https://api.openai.com/v1/chat/completions');
 assert.equal(sent.auth, 'Bearer sk-test');
-assert.equal(sent.body.model, 'gpt-4.1-mini');
+assert.equal(sent.body.model, 'gpt-6-luna');
 assert.equal(sent.body.response_format.type, 'json_schema');
 assert.ok(sent.body.max_completion_tokens <= 4000);
 assert.match(sent.body.messages[0].content, /\[S1\]/, 'research notes are in the prompt');

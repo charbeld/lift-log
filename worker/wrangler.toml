@@ -22,4 +22,5 @@ VAPID_PUBLIC_KEY = "BC6YxRoXiYWB5UYDgkP4KwyZBHCzayJqj_IoZYn7hOh6m5qjWQOhZcIzglCt
 VAPID_SUBJECT = "https://charbeld.github.io/lift-log/"
 ALLOWED_ORIGIN = "https://charbeld.github.io"
 ALLOWED_EMAILS = "charbeld10@gmail.com"
+OPENAI_MODEL = "gpt-6-luna"
 # Secret (wrangler secret put VAPID_PRIVATE_JWK < .vapid-private.json): VAPID_PRIVATE_JWK

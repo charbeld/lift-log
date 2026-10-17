@@ -152,6 +152,19 @@ export function newSession(day, date = todayStr()) {
   return s;
 }
 
+// A combined session: its exercises come from the merge of skipped days (plus the due day), not from one day's program.
+export function newCombinedSession(due, exercises, combined) {
+  const s = newSession(due);
+  s.exercises = exercises.map((e) => ({
+    id: e.key, name: e.name, cat: e.cat,
+    target: { sets: e.sets, repMin: e.repMin, repMax: e.repMax, rest: e.rest },
+    sets: Array.from({ length: e.sets }, (_, i) => ({ w: e.w != null ? fmtKg(e.w) : '', r: '', tr: e.reps[i] ?? e.repMin, done: false })),
+    note: '', skipped: false,
+  }));
+  s.combined = combined;
+  return s;
+}
+
 // The target for one program slot: a coach plan if it is newer than the last session, otherwise the double-progression rule.
 export function planFor(id, target, last) {
   const rec = state.recs?.byKey?.[id];

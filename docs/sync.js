@@ -97,6 +97,12 @@ export async function getCoachPlan() {
   return post('/coach', {});
 }
 
+export async function getMergedSession(owed, due) {
+  if (!status.enabled || !signedIn()) throw new Error('sign in to build a combined session');
+  await syncNow();
+  return post('/merge', { owed, due });
+}
+
 export function scheduleSync(ms = 2500) {
   if (!status.enabled) return;
   clearTimeout(timer);
