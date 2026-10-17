@@ -1,7 +1,7 @@
 // AI coach. The numbers are computed here from the lifter's logs with fixed rules (double progression, plus a
 // conservative conversion for a new rep range). The model only explains each plan, citing the research notes.
 import { KNOWLEDGE, SOURCES, SOURCE_IDS } from './knowledge.js';
-import { PROGRAM_RULES, musclesFor } from './program-kb.js';
+import { PROGRAM_RULES, musclesFor, patternFor } from './program-kb.js';
 
 const MODEL = 'gpt-6-luna'; // lowest-cost GPT-6 tier; cheap enough for structured JSON work (override with OPENAI_MODEL)
 const TIMEOUT_MS = 25000;
@@ -312,7 +312,7 @@ export async function mergeSession(env, workouts, program, owed, due, fetchImpl 
       warmup_minutes: WARMUP_MIN,
       days: { owed, due },
       library: cands.map(({ slot, role, rule: r, item }) => ({
-        key: slot.key, name: slot.name, day: slot.day, role, muscles: musclesFor(slot.name), category: item.cat,
+        key: slot.key, name: slot.name, day: slot.day, role, muscles: musclesFor(slot.name), pattern: patternFor(slot.name), category: item.cat,
         target_sets: slot.target.sets, rep_min: slot.target.repMin, rep_max: slot.target.repMax, rest_sec: slot.target.rest,
         cue: item.notes || '', action: r.action, weight_kg: r.w, reps: r.reps, facts: r.facts,
       })),

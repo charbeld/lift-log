@@ -6,6 +6,8 @@ iPhone web app (PWA) for the 3-day full-body program (Day A / B / C from
 - Log weight + reps per set, pre-filled from last time, with double-progression suggestions
 - Rest timer that starts when you tick a set; lock-screen alert via Web Push
 - Program notes and form cues on every exercise, per-exercise and per-workout notes, pinned notes
+- Animated demo (start/end photos) on every exercise and swap option, from the public-domain
+  [free-exercise-db](https://github.com/yuhonas/free-exercise-db); mapping in `docs/demos.js`
 - Week number from the program start date; history by workout and a week-by-week grid
 - Progress: top weight, estimated 1RM, volume per exercise, weekly volume, consistency calendar
 - Edit the program: sets, reps, rest, weight jump, swaps from the spreadsheet's swap table
