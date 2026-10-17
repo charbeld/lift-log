@@ -3,7 +3,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { sendPush, b64u } from './webpush.js';
 import { verifyGoogleIdToken } from './google.js';
-import { recommend } from './coach.js';
+import { recommend, mergeSession } from './coach.js';
 
 const cors = (env) => ({
   'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
@@ -100,13 +100,28 @@ async function schedule(req, env, user) {
 const timerFor = (env, user) => env.TIMERS.get(env.TIMERS.idFromName(user.id));
 
 // The coach reads the user's history from D1 itself, so the app never has to send its data.
-async function coach(req, env, user) {
-  if (!env.OPENAI_API_KEY) return json(env, { error: 'Coach is not set up (OPENAI_API_KEY)' }, 503);
+async function history(env, user) {
   const { results } = await env.DB.prepare('SELECT data FROM workouts WHERE user_id = ? AND deleted = 0').bind(user.id).all();
   const prof = await env.DB.prepare('SELECT program FROM profiles WHERE user_id = ?').bind(user.id).first();
-  if (!prof) return json(env, { error: 'Sync your program first' }, 400);
-  const plan = await recommend(env, results.map((r) => JSON.parse(r.data)), JSON.parse(prof.program));
-  return json(env, plan);
+  return prof ? { workouts: results.map((r) => JSON.parse(r.data)), program: JSON.parse(prof.program) } : null;
+}
+
+async function coach(req, env, user) {
+  if (!env.OPENAI_API_KEY) return json(env, { error: 'Coach is not set up (OPENAI_API_KEY)' }, 503);
+  const h = await history(env, user);
+  if (!h) return json(env, { error: 'Sync your program first' }, 400);
+  return json(env, await recommend(env, h.workouts, h.program));
+}
+
+// A combined session for skipped days: `owed` are the skipped days, `due` the day that is due now.
+async function merge(req, env, user) {
+  if (!env.OPENAI_API_KEY) return json(env, { error: 'Coach is not set up (OPENAI_API_KEY)' }, 503);
+  const { owed, due } = await req.json();
+  const day = (d) => ['A', 'B', 'C'].includes(d);
+  if (!Array.isArray(owed) || owed.length < 1 || owed.length > 3 || !owed.every(day) || !day(due)) return json(env, { error: 'bad days' }, 400);
+  const h = await history(env, user);
+  if (!h) return json(env, { error: 'Sync your program first' }, 400);
+  return json(env, await mergeSession(env, h.workouts, h.program, owed, due));
 }
 
 export default {
@@ -125,6 +140,7 @@ export default {
         case '/schedule': return await schedule(req, env, user);
         case '/cancel': await timerFor(env, user).cancel(); return json(env, { ok: true });
         case '/coach': return await coach(req, env, user);
+        case '/merge': return await merge(req, env, user);
         case '/logout':
           await env.DB.prepare('DELETE FROM auth_tokens WHERE token_hash = ?').bind(user.tokenHash).run();
           return json(env, { ok: true });

@@ -2,11 +2,14 @@
 // conservative conversion for a new rep range). The model only explains each plan, citing the research notes.
 import { KNOWLEDGE, SOURCES, SOURCE_IDS } from './knowledge.js';
 
-const MODEL = 'gpt-4.1-mini'; // the model used in the other projects (structured JSON work)
+const MODEL = 'gpt-6-luna'; // lowest-cost GPT-6 tier; cheap enough for structured JSON work (override with OPENAI_MODEL)
 const TIMEOUT_MS = 25000;
 const MAX_SLOTS = 40;
 const HISTORY = 6;
 const ACTIONS = ['increase', 'reps', 'hold', 'reduce'];
+const BUDGET_MIN = 90; // a combined session (two skipped days merged) must fit in 1.5 hours
+const WARMUP_MIN = 10;
+const WORK_SEC = 40; // rough time under the bar per set, used only to estimate the length of a session
 
 const num = (v) => {
   if (v === '' || v == null) return null;
@@ -160,7 +163,7 @@ Keep the summary to one or two sentences about the session as a whole. Reply wit
 Research notes:
 ${KNOWLEDGE}`;
 
-export async function askCoach(env, input, fetchImpl = fetch) {
+export async function askCoach(env, input, fetchImpl = fetch, { system = SYSTEM, schema = PLAN_SCHEMA, name = 'coach_explanations' } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
@@ -172,8 +175,8 @@ export async function askCoach(env, input, fetchImpl = fetch) {
         model: env.OPENAI_MODEL || MODEL,
         temperature: 0.2,
         max_completion_tokens: 2500, // a cap stops runaway JSON output (see LEARNING.md, gpt-4.1-mini runaway)
-        response_format: { type: 'json_schema', json_schema: { name: 'coach_explanations', strict: true, schema: PLAN_SCHEMA } },
-        messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: JSON.stringify(input) }],
+        response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(input) }],
       }),
     });
     if (!res.ok) throw new Error(`coach model HTTP ${res.status}`);
@@ -225,4 +228,123 @@ export async function recommend(env, workouts, program, fetchImpl) {
     console.log('coach explanation unavailable', e.message);
   }
   return { ...assemble(rules, raw), at, explained };
+}
+
+// ----- Combined session: two (or more) skipped days merged into one session of at most 90 minutes -----
+
+const MERGE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'exercises'],
+  properties: {
+    summary: { type: 'string' },
+    exercises: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'sets', 'rationale'],
+        properties: {
+          key: { type: 'string' },
+          sets: { type: 'integer' },
+          rationale: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+const MERGE_SYSTEM = `You combine a lifter's skipped training day with the day that is due now, into ONE session.
+The lifter's app gives you every exercise of both days with its target sets, rep range, rest, and the computed plan
+(weight_kg, reps, action, facts). The weights and reps are final: do not change or question them.
+
+Rules:
+- The whole session must fit in budget_minutes, warm-up included (warmup_minutes). Time per exercise is
+  sets × (about 40 seconds of work + its rest_sec). Cut sets or drop the least important exercises to fit. Keep
+  at least 2 sets for any exercise you keep.
+- Keep the main lifts of each day where you can. Drop exercises that repeat the same movement pattern when both
+  days cover it, and never list the same exercise twice.
+- Order the list as the session should be done: heavy compounds first, isolation and core last.
+- Use only keys from the input. Return "sets" as an integer.
+- For each exercise you keep, write a rationale of one or two plain sentences: say why it stays, and cite the
+  research id that supports the choice (for example [S2]). Use only ids that appear in the notes.
+- The summary is one or two sentences: which days were combined and what was cut to fit.
+
+Reply with JSON only, matching the schema.
+
+Research notes:
+${KNOWLEDGE}`;
+
+export const sessionMinutes = (exs) =>
+  WARMUP_MIN + exs.reduce((a, e) => a + (e.sets * (WORK_SEC + e.rest)) / 60, 0);
+
+// Every exercise of the owed days and the due day, one per lift (due day first), each with its computed plan.
+export function mergeCandidates(workouts, program, owed, due) {
+  const slots = buildHistory(workouts, program);
+  const seen = new Set();
+  const out = [];
+  for (const day of [due, ...owed]) {
+    for (const slot of slots.filter((s) => s.day === day)) {
+      const k = exKey(slot.key);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ slot, rule: computeRule(slot), item: program[day].items.find((it) => it.id === slot.key) });
+    }
+  }
+  return out;
+}
+
+export async function mergeSession(env, workouts, program, owed, due, fetchImpl = fetch) {
+  const cands = mergeCandidates(workouts, program, owed, due);
+  if (!cands.length) throw new Error('No exercises to combine');
+  const byKey = new Map(cands.map((c) => [c.slot.key, c]));
+  let raw = null;
+  try {
+    raw = await askCoach(env, {
+      budget_minutes: BUDGET_MIN,
+      warmup_minutes: WARMUP_MIN,
+      days: { owed, due },
+      exercises: cands.map(({ slot, rule: r, item }) => ({
+        key: slot.key, name: slot.name, day: slot.day, category: item.cat,
+        target_sets: slot.target.sets, rep_min: slot.target.repMin, rep_max: slot.target.repMax, rest_sec: slot.target.rest,
+        action: r.action, weight_kg: r.w, reps: r.reps, facts: r.facts,
+      })),
+    }, fetchImpl, { system: MERGE_SYSTEM, schema: MERGE_SCHEMA, name: 'combined_session' });
+  } catch (e) {
+    console.log('combined session explanation unavailable', e.message);
+  }
+
+  // Keep the model's choices only where they match a real exercise; sets stay between 2 and the target.
+  let picked = [];
+  const used = new Set();
+  for (const line of raw?.exercises || []) {
+    const c = byKey.get(line.key);
+    if (!c || used.has(line.key)) continue;
+    used.add(line.key);
+    const sets = Math.min(c.slot.target.sets, Math.max(2, Math.round(Number(line.sets)) || c.slot.target.sets));
+    picked.push({ c, sets, rationale: String(line.rationale || c.rule.facts).slice(0, 400) });
+  }
+  const explained = picked.length > 0;
+  if (!explained) picked = cands.map((c) => ({ c, sets: c.slot.target.sets, rationale: c.rule.facts }));
+
+  // The budget is enforced here, not trusted to the model: drop from the end (the least important) until it fits.
+  const len = () => sessionMinutes(picked.map((p) => ({ sets: p.sets, rest: p.c.slot.target.rest })));
+  while (picked.length > 1 && len() > BUDGET_MIN) picked.pop();
+
+  return {
+    summary: String(raw?.summary || `Combined ${owed.join(' + ')} and ${due} into one session.`).slice(0, 400),
+    minutes: Math.round(len()),
+    explained,
+    at: Date.now(),
+    exercises: picked.map(({ c, sets, rationale }) => {
+      const { slot, rule: r, item } = c;
+      return {
+        key: slot.key, name: slot.name, day: slot.day, cat: item.cat,
+        sets, repMin: slot.target.repMin, repMax: slot.target.repMax, rest: slot.target.rest,
+        w: r.w, reps: r.reps.slice(0, sets), action: ACTIONS.includes(r.action) ? r.action : 'hold',
+        rationale,
+        sources: SOURCES.filter((s) => r.sources.includes(s.id) && SOURCE_IDS.includes(s.id)).map(({ id, title, url }) => ({ id, title, url })),
+      };
+    }),
+  };
 }

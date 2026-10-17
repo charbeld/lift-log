@@ -1,17 +1,17 @@
 import { PROGRESSION_RULE, swapOptions, exId, exKey, freshProgram } from './program.js';
 import {
-  state, save, commit, onChange, touchSession, touchProfile, replaceAll,
+  state, save, commit, onChange, touchSession, touchProfile, replaceAll, newCombinedSession,
   todayStr, toDateStr, parseDate, weekFor, mondayOf, num, fmtKg, e1rm, fmtDur, fmtClock,
   liveSessions, finishedSessions, doneSets, sessionStats, lastPerformance, planFor,
   newSession, buildExercise, findItem, bestBefore,
 } from './store.js';
-import { initSync, scheduleSync, syncNow, signIn, signOut, signedIn, getCoachPlan, status as syncStatus } from './sync.js';
+import { initSync, scheduleSync, syncNow, signIn, signOut, signedIn, getCoachPlan, getMergedSession, status as syncStatus } from './sync.js';
 import {
   startRest, stopRest, resumeTimer, unlockAudio, enablePush, disablePush, sendTestPush, pushConfigured, isStandalone,
 } from './timer.js';
 import { renderCharts } from './charts.js';
 
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const $ = (id) => document.getElementById(id);
 const view = $('view');
 const DAYS = ['A', 'B', 'C'];
@@ -169,6 +169,28 @@ function nextDay() {
   const last = finishedSessions()[0];
   return last ? DAYS[(DAYS.indexOf(last.day) + 1) % 3] : 'A';
 }
+const shift = (letter, n) => DAYS[(DAYS.indexOf(letter) + n) % 3];
+const addDays = (s, n) => { const d = parseDate(s); return toDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)); };
+const trainDays = () => state.settings.trainDays || [1, 3, 5]; // Mon, Wed, Fri by default (0 = Sunday)
+
+// The scheduled training days since the last finished workout (or the program start, at most 14 days back),
+// each with the program day it stands for and its answer ('skipped', 'trained', 'combined', 'dropped' or none).
+function pastSlots() {
+  const last = finishedSessions()[0]?.date || state.settings.startDate;
+  if (!last) return [];
+  const today = todayStr(), floor = addDays(today, -14), from = last > floor ? last : floor;
+  const days = trainDays(), answers = state.settings.skips || {}, out = [];
+  for (let d = addDays(from, 1); d < today; d = addDays(d, 1)) if (days.includes(parseDate(d).getDay())) out.push(d);
+  return out.map((date, i) => ({ date, day: shift(nextDay(), i), answer: answers[date] || null }));
+}
+
+// Skipped days waiting to be made up, and the day that is due now after them.
+function skipPlan() {
+  const slots = pastSlots();
+  const skipped = slots.filter((s) => s.answer === 'skipped');
+  if (!skipped.length) return null;
+  return { dates: skipped.map((s) => s.date), owed: skipped.map((s) => s.day), due: shift(nextDay(), slots.length) };
+}
 
 function renderTrain() {
   if (ui.editingId && state.sessions[ui.editingId]) return renderSession(state.sessions[ui.editingId], 'edit');
@@ -177,6 +199,14 @@ function renderTrain() {
   const today = todayStr();
   const next = nextDay();
   refreshCoach();
+  const plan = skipPlan();
+  const missed = pastSlots().filter((s) => !s.answer).slice(0, 3);
+  const missedCard = missed.length ? `<div class="card missed"><div class="eyebrow">Did you skip?</div>${missed.map((m) => `<p><b>${fmtDate(m.date)}</b> · ${esc(dayTitle(m.day))}</p>
+      <div class="row" style="gap:10px;margin-bottom:10px"><button class="btn sm grow" data-act="miss-answer" data-date="${m.date}" data-v="skipped">Yes, skipped</button><button class="btn sm grow" data-act="miss-answer" data-date="${m.date}" data-v="trained">No, I trained</button></div>`).join('')}</div>` : '';
+  const comboCard = plan ? `<div class="card combo"><div class="eyebrow">Skipped · ${plan.dates.map(fmtShort).join(', ')}</div>
+      <h2>${plan.owed.map((d) => esc(dayTitle(d))).join(' + ')} + ${esc(dayTitle(plan.due))}</h2>
+      <p class="muted small">One session for the skipped day and the day due now, at most 90 minutes.</p>
+      <div class="row" style="gap:14px"><button class="btn primary grow" data-act="combo-start">Build combined session</button><button class="link" data-act="combo-forget">Forget it</button></div></div>` : '';
   const cards = DAYS.map((d) => {
     const p = state.program[d];
     const last = finishedSessions().find((s) => s.day === d);
@@ -186,10 +216,10 @@ function renderTrain() {
       if (!r) return '';
       return `<li><span class="grow">${esc(it.name)}</span><span class="num">${r.w != null ? fmtKg(r.w) + ' kg' : '–'} · ${r.reps.join('/')}${r.action === 'increase' ? ' <span class="up">↑</span>' : ''}</span></li>`;
     }).join('') : '';
-    return `<div class="card day-card ${d === next ? 'next' : ''}">
+    return `<div class="card day-card ${d === next && !plan ? 'next' : ''}">
       <button class="day-hit" data-act="start" data-day="${d}">
         <span class="letter">${d}</span>
-        ${d === next ? '<div class="tag">Up next</div>' : ''}
+        ${d === next && !plan ? '<div class="tag">Up next</div>' : ''}
         <h2>${esc(p.title)}</h2><p>${esc(p.subtitle)}</p>
         <div class="meta">${p.items.length} exercises · ${last ? 'last done ' + relDate(last.date) : 'not done yet'}</div>
       </button>
@@ -197,6 +227,7 @@ function renderTrain() {
     </div>`;
   }).join('');
   return `<div class="hero"><div class="eyebrow">Week ${weekFor(today)} · ${fmtDate(today)}</div><h1>Start a workout</h1></div>
+    ${missedCard}${comboCard}
     ${cards}
     <p style="text-align:center;margin-top:22px"><button class="link" data-act="log-past">Log a past workout</button></p>`;
 }
@@ -211,7 +242,8 @@ function renderSession(s, mode) {
     ? `<div class="eyebrow">Editing · Week ${s.week}</div><h1>${esc(prog.title)}</h1>
        <label class="field"><span>Date</span><input type="date" data-bind="sdate" value="${s.date}"></label>`
     : `<div class="eyebrow">Week ${s.week} · ${fmtDate(s.date)}</div><h1>${esc(prog.title)}</h1>`;
-  return `<div class="s-head"><div class="grow">${head}</div>${mode === 'active' ? '<div class="elapsed" id="elapsed"></div>' : ''}</div>
+  const combo = s.combined ? `<p class="small muted" style="margin-top:6px">Combined with ${s.combined.owed.map((d) => esc(dayTitle(d))).join(' + ')} · up to ${s.combined.minutes} min${s.combined.summary ? '. ' + esc(s.combined.summary) : ''}</p>` : '';
+  return `<div class="s-head"><div class="grow">${head}${combo}</div>${mode === 'active' ? '<div class="elapsed" id="elapsed"></div>' : ''}</div>
     <div class="progress-line"><div style="width:${total ? (done / total) * 100 : 0}%"></div></div>
     ${wu.length ? `<details class="card warmups" ${wuDone < wu.length && mode === 'active' && done === 0 ? 'open' : ''}>
       <summary><span class="chip WARM-UP">Warm-up</span><span class="grow">${wuDone}/${wu.length} done</span>${icon('down')}</summary>
@@ -549,7 +581,9 @@ function openSettings(keepScroll = false) {
     <h3 style="margin-top:0">Account &amp; sync</h3><div class="set-group">${acct}</div>
     <h3>Program</h3><div class="set-group">
       <label class="field" style="margin:10px 0"><span>Program start date (week 1)</span><input type="date" data-set="startDate" value="${state.settings.startDate || ''}"></label>
-      <div class="small muted" style="padding-bottom:12px">Today is week ${weekFor(todayStr())}.</div></div>
+      <div class="small muted" style="padding-bottom:12px">Today is week ${weekFor(todayStr())}.</div>
+      <div class="small muted" style="padding-bottom:8px">Training days (the app asks about a missed one)</div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;padding-bottom:12px">${WD.map((n, i) => `<label class="btn sm ${trainDays().includes(i) ? 'primary' : ''}" style="cursor:pointer;min-width:54px;justify-content:center"><input type="checkbox" data-trainday="${i}" ${trainDays().includes(i) ? 'checked' : ''} hidden>${n}</label>`).join('')}</div></div>
     <h3>Rest timer</h3><div class="set-group">
       <label class="toggle"><span class="grow"><b>Sound</b><div class="small muted">Beep when rest ends (ringer switch must be on)</div></span><input type="checkbox" data-pref="sound" ${state.prefs.sound ? 'checked' : ''}></label>
       <label class="toggle"><span class="grow"><b>Keep screen awake</b><div class="small muted">During a workout</div></span><input type="checkbox" data-pref="wake" ${state.prefs.wake ? 'checked' : ''}></label>
@@ -593,6 +627,30 @@ const actions = {
     unlockAudio();
     if (activeSession()) return toast('Finish or discard the current workout first');
     await startDay(el.dataset.day);
+  },
+  'miss-answer'(el) {
+    state.settings.skips = { ...(state.settings.skips || {}), [el.dataset.date]: el.dataset.v };
+    touchProfile(); scheduleSync(); render();
+  },
+  'combo-forget'() {
+    const skips = { ...(state.settings.skips || {}) };
+    for (const s of pastSlots()) if (s.answer === 'skipped') skips[s.date] = 'dropped';
+    state.settings.skips = skips; touchProfile(); scheduleSync(); render();
+  },
+  async 'combo-start'() {
+    unlockAudio();
+    if (activeSession()) return toast('Finish or discard the current workout first');
+    const plan = skipPlan();
+    if (!plan) return render();
+    toast('Building the combined session…', 8000);
+    let res;
+    try { res = await getMergedSession(plan.owed, plan.due); } catch (e) { return toast('Could not build it: ' + e.message, 4000); }
+    const s = newCombinedSession(plan.due, res.exercises, { owed: plan.owed, dates: plan.dates, summary: res.summary, minutes: res.minutes });
+    state.settings.skips = { ...(state.settings.skips || {}) };
+    for (const d of plan.dates) state.settings.skips[d] = 'combined';
+    touchProfile();
+    state.activeId = s.id; touchSession(s); scheduleSync();
+    ui.tab = 'train'; render(); view.scrollTo(0, 0);
   },
   'log-past'() {
     openSheet(`<h2>Log a past workout</h2>
@@ -755,6 +813,11 @@ const actions = {
     if (!(await confirmSheet('Discard workout?', 'Everything logged in this session will be removed.', 'Discard', true))) return;
     const s = activeSession();
     s.deleted = true; state.activeId = null; stopRest();
+    if (s.combined) { // the skipped days are owed again
+      state.settings.skips = { ...(state.settings.skips || {}) };
+      for (const d of s.combined.dates) state.settings.skips[d] = 'skipped';
+      touchProfile();
+    }
     touchSession(s); scheduleSync(); render();
   },
   'edit-done'() { const id = ui.editingId; ui.editingId = null; const s = state.sessions[id]; if (!s.finishedAt) { s.finishedAt = s.startedAt; touchSession(s); } scheduleSync(); ui.tab = 'history'; ui.historyId = id; render(); view.scrollTo(0, 0); },
@@ -950,6 +1013,11 @@ document.addEventListener('change', (e) => {
   } else if (el.dataset.set === 'startDate') {
     state.settings.startDate = el.value || null;
     for (const s of liveSessions()) { const w = weekFor(s.date); if (s.week !== w) { s.week = w; touchSession(s); } }
+    touchProfile(); scheduleSync(); openSettings(true); render();
+  } else if (el.dataset.trainday !== undefined) {
+    const set = new Set(trainDays()), d = +el.dataset.trainday;
+    if (el.checked) set.add(d); else set.delete(d);
+    state.settings.trainDays = [...set].sort();
     touchProfile(); scheduleSync(); openSettings(true); render();
   } else if (el.dataset.pref) {
     state.prefs[el.dataset.pref] = el.checked; save(); manageWakeLock();
